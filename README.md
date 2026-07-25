@@ -1,13 +1,13 @@
-# Buzz × Silo — long-term memory for your Buzz workspace
+# Buzz × One Silo — long-term memory for your Buzz workspace
 
-**A [Buzz](https://buzz.xyz/) agent that remembers, powered by [Silo](https://dashboard.onesilo.com/).**
+**A [Buzz](https://buzz.xyz/) agent that remembers, powered by [One Silo](https://dashboard.onesilo.com/).**
 
 Buzz is an open-source workspace where humans and AI agents work together —
 every message is a cryptographically signed event, and agents join channels
 the same way coworkers do. But like every chat tool, conversation scrolls
 away: decisions get re-litigated, facts get re-asked, context evaporates.
 
-This project adds a **Silo Memory agent** to your workspace: a Buzz member
+This project adds a **memory agent** to your workspace: a Buzz member
 with its own keypair that quietly distills your channels into durable,
 searchable memory — and answers with that memory when asked, across channels
 and across time.
@@ -73,10 +73,11 @@ npm test        # the test suite, including an end-to-end in-process relay
 
 The demo runs entirely offline against a local memory store.
 
-### 2. Get a Silo
+### 2. Get a silo
 
-The agent's real memory is a **Silo** — a private, managed memory store with
-semantic recall, entity/topic enrichment, and an owner dashboard. Your
+The agent's real memory is a **silo** — a private, managed memory store
+powered by One Silo, with semantic recall, entity/topic enrichment, and an
+owner dashboard. Your
 memory stays portable: silos export to the open `.silo` file format, specified
 at [onesilo/onesilo-spec](https://github.com/onesilo/onesilo-spec).
 
@@ -85,7 +86,7 @@ free to start. That's the only dashboard step: the agent registers itself
 when you pair it (next step), and a dedicated silo is provisioned for it
 automatically.
 
-### 3. Pair the agent with your Silo account
+### 3. Pair the agent with your One Silo account
 
 ```bash
 cp .env.example .env    # set BUZZ_RELAY_URL; the defaults cover the rest
@@ -94,7 +95,7 @@ npm run connect
 
 `connect` prints an authorization URL. Open it, approve, done — this is
 standard OAuth, the same flow ChatGPT, Claude, and Cursor use to connect to
-Silo. The agent then appears in your dashboard under
+One Silo. The agent then appears in your dashboard under
 **[Connections](https://dashboard.onesilo.com/connections)** as
 *Buzz Agent (@yourhandle)*, where you manage it like any connected app:
 revoke access, set rate limits, require approvals, scope which silos it can
@@ -113,7 +114,7 @@ prints its pubkey on first boot — pin it with `AGENT_SECRET_KEY` in `.env`).
 
 ```
 ┌────────────┐   WebSocket    ┌───────────────────┐    MCP over HTTPS    ┌──────────────────┐
-│ Buzz relay │ ─────────────▶ │ Silo Memory agent │ ───────────────────▶ │ Silo             │
+│ Buzz relay │ ─────────────▶ │   memory agent    │ ───────────────────▶ │ One Silo         │
 │  (signed   │ ◀───────────── │  ingest → distill │ ◀─────────────────── │  semantic recall │
 │   events)  │  signed replies│  recall → reply   │   grounded answers   │  + enrichment    │
 └────────────┘                └───────────────────┘                      └──────────────────┘
@@ -125,11 +126,11 @@ The agent speaks two open protocols and nothing else:
   `h` channel tag); the agent verifies every signature it reads and signs
   everything it publishes with its own keypair. NIP-42 relay auth is
   supported.
-- **To Silo: MCP + OAuth.** The agent is a standard
+- **To One Silo: MCP + OAuth.** The agent is a standard
   [Model Context Protocol](https://modelcontextprotocol.io/) client of the
-  Silo platform — the same connection surface as every other MCP client.
-  Capture goes through Silo's ingestion pipeline (which enriches memories
-  with entities, topics, and relationships), recall uses Silo's semantic
+  One Silo platform — the same connection surface as every other MCP client.
+  Capture goes through One Silo's ingestion pipeline (which enriches memories
+  with entities, topics, and relationships), recall uses One Silo's semantic
   search, and questions are answered by the silo itself, grounded in its
   own memory. Memory-replacing writes are surfaced for owner confirmation,
   never auto-applied by the agent.
@@ -137,7 +138,7 @@ The agent speaks two open protocols and nothing else:
 | Path | What it is |
 | --- | --- |
 | `src/buzz/` | Nostr protocol surface: event parsing, agent identity, relay transport, and an in-process fake relay for demo/tests |
-| `src/silo/` | The `MemoryStore` contract with two backends: Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use |
+| `src/silo/` | The `MemoryStore` contract with two backends: One Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use |
 | `src/memory/` | Distillation heuristics and reply formatting |
 | `src/agent.ts` | The agent loop: routes events to ingest / commands / recall |
 | `src/connect.ts` | One-time OAuth pairing CLI |
@@ -174,7 +175,7 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `BUZZ_CHANNEL_IDS` | *(all visible)* | Comma-separated channels to listen in |
 | `AGENT_HANDLE` | `silo` | The agent's @handle |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
-| `SILO_MODE` | `mcp` | `mcp` (Silo platform) or `local` (JSON file) |
+| `SILO_MODE` | `mcp` | `mcp` (One Silo platform) or `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://api.onesilo.com` | Silo control plane |
 | `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
 | `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |

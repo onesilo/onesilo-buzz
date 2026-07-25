@@ -1,5 +1,5 @@
 /**
- * MemoryStore backed by the Silo control plane's existing MCP tool surface —
+ * MemoryStore backed by the One Silo control plane's existing MCP tool surface —
  * the agent is a standard MCP client (see mcp-client.ts / oauth.ts), so this
  * store uses only tools every other MCP client already uses:
  *
@@ -88,7 +88,7 @@ export class McpSiloStore implements MemoryStore {
       if (!siloIds.has(bucket)) {
         this.log(
           `warning: configured bucket "${bucket}" is not in this connection's ` +
-            `scope — grant the silo to this connection in the Silo dashboard ` +
+            `scope — grant the silo to this connection in the One Silo dashboard ` +
             `(Connections → Buzz Agent → Silos) or fix SILO_CHANNEL_MAP/SILO_ID.`
         );
       }

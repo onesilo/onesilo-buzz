@@ -1,7 +1,7 @@
 /**
- * Entrypoint: connect the Silo Memory agent to a real Buzz workspace relay.
+ * Entrypoint: connect the memory agent to a real Buzz workspace relay.
  *
- * First run: `npm run connect` to pair with the Silo control plane (OAuth,
+ * First run: `npm run connect` to pair with the One Silo control plane (OAuth,
  * one-time human approval). Then `npm start`. For a zero-infrastructure
  * walkthrough, run `npm run demo` instead.
  */
@@ -36,7 +36,7 @@ if (config.silo.mode === "mcp") {
     callbackPort: config.silo.callbackPort,
   });
   if (!oauth.isPaired) {
-    console.error("Not paired with Silo yet. Run: npm run connect");
+    console.error("Not paired with One Silo yet. Run: npm run connect");
     process.exit(1);
   }
   if (!oauth.canRefresh) {

@@ -1,6 +1,6 @@
 /**
- * Standalone demo: a scripted Buzz conversation flowing through the Silo
- * Memory agent, with an in-process fake relay and the local Silo store.
+ * Standalone demo: a scripted Buzz conversation flowing through the
+ * memory agent, with an in-process fake relay and the local silo store.
  *
  *   npm run demo
  *

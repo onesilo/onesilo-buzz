@@ -1,9 +1,9 @@
 /**
- * OAuth 2.1 client for the Silo control plane — the same flow the backend
+ * OAuth 2.1 client for the One Silo control plane — the same flow the backend
  * serves to every MCP client (ChatGPT, Claude, Cursor): RFC 8414 discovery,
  * Dynamic Client Registration, authorization_code + PKCE, refresh_token.
  * MCP IS OAuth — the agent authenticates exactly like any other MCP client,
- * which is what makes it show up as a connection in the Silo dashboard.
+ * which is what makes it show up as a connection in the One Silo dashboard.
  *
  * Headless pairing: `npm run connect` prints the authorize URL; the agent's
  * human sponsor approves once in a browser (the loopback redirect catches
@@ -139,7 +139,7 @@ export class SiloOAuthClient {
       code_verifier: verifier,
       redirect_uri: this.redirectUri(),
     });
-    log("Paired. The agent now appears in the Silo dashboard under Connections.");
+    log("Paired. The agent now appears in the One Silo dashboard under Connections.");
   }
 
   private waitForCallback(expectedState: string): Promise<string> {
@@ -207,7 +207,7 @@ export class SiloOAuthClient {
   accessToken(): string {
     const token = this.creds?.access_token;
     if (!token) {
-      throw new Error("Not paired with Silo yet — run `npm run connect` first.");
+      throw new Error("Not paired with One Silo yet — run `npm run connect` first.");
     }
     return token;
   }

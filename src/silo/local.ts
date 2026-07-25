@@ -1,5 +1,5 @@
 /**
- * Standalone Silo store: JSON persistence + lexical ranking. Exists so the
+ * Standalone silo store: JSON persistence + lexical ranking. Exists so the
  * prototype runs end-to-end with zero infrastructure. The real deployment
  * swaps in `McpSiloStore` (same interface) — see mcp-store.ts.
  *
