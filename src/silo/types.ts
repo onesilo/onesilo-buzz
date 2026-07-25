@@ -40,7 +40,12 @@ export interface Memory {
 
 export interface MemoryQuery {
   text: string;
-  /** Restrict recall to one channel; omit for silo-wide recall. */
+  /**
+   * The channel the query comes from. Selects the memory bucket (silo) the
+   * store routes to; recall is bucket-wide — channels sharing a bucket
+   * share memory, which is the product behavior ("decided in #eng,
+   * recallable in #support").
+   */
   channelId?: string;
   limit?: number;
 }
@@ -67,18 +72,25 @@ export type RememberOutcome =
   | { status: "needs_confirmation" };
 
 export interface MemoryStore {
+  /** Capture; bucket-routed by memory.source.channelId. */
   remember(memory: Memory): Promise<RememberOutcome>;
   recall(query: MemoryQuery): Promise<ScoredMemory[]>;
-  forget(memoryId: string): Promise<boolean>;
-  /** Most recent memories, newest first. */
+  /** Delete by id; channelId selects the bucket to delete from. */
+  forget(memoryId: string, channelId?: string): Promise<boolean>;
+  /** Most recent memories for a channel, newest first. */
   recent(channelId: string | undefined, limit: number): Promise<Memory[]>;
   /**
    * Silo-composed answer to a question (the backend's `silo_ask`): a
-   * finished, grounded reply meant to be relayed verbatim. Stores that
-   * can't compose answers omit this and the agent falls back to
-   * recall + local formatting.
+   * finished, grounded reply meant to be relayed verbatim; channelId
+   * selects the bucket. Stores that can't compose answers omit this and
+   * the agent falls back to recall + local formatting.
    */
-  ask?(question: string): Promise<string>;
-  /** Silo-composed overview of what's stored (used by !memories). */
-  overview?(): Promise<string>;
+  ask?(question: string, channelId?: string): Promise<string>;
+  /** Silo-composed overview of the channel's bucket (used by !memories). */
+  overview?(channelId?: string): Promise<string>;
+  /**
+   * Optional startup hook: discover what the connection can reach
+   * (silo_get_scope — silos, granted shapes) and validate configuration.
+   */
+  init?(): Promise<void>;
 }

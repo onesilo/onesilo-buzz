@@ -13,6 +13,7 @@ import { LocalSiloStore } from "./silo/local.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
 import { McpClient } from "./silo/mcp-client.js";
 import { McpSiloStore } from "./silo/mcp-store.js";
+import { SiloBucketRouter } from "./silo/buckets.js";
 import { SiloMemoryAgent } from "./agent.js";
 import type { MemoryStore } from "./silo/types.js";
 
@@ -45,7 +46,8 @@ if (config.silo.mode === "mcp") {
     );
   }
   const mcp = new McpClient(`${config.silo.serverUrl}/mcp`, oauth);
-  store = new McpSiloStore(mcp, config.silo.siloId, log);
+  const router = SiloBucketRouter.fromEnv(config.silo.siloId, config.silo.channelMap);
+  store = new McpSiloStore(mcp, router, log);
 } else {
   store = new LocalSiloStore(config.silo.path);
 }
@@ -56,7 +58,14 @@ const agent = new SiloMemoryAgent(relay, store, identity, {
   log,
 });
 
-agent.start().catch((err) => {
+async function main() {
+  // Scope discovery first: logs the connection's silos/shapes and warns on
+  // buckets the connection can't reach.
+  if (store.init) await store.init();
+  await agent.start();
+}
+
+main().catch((err) => {
   console.error("failed to start agent:", err);
   process.exit(1);
 });

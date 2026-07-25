@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { McpSiloStore } from "../src/silo/mcp-store.js";
+import { SiloBucketRouter } from "../src/silo/buckets.js";
 import type { McpClient, ToolResult } from "../src/silo/mcp-client.js";
 import type { Memory } from "../src/silo/types.js";
 
@@ -50,7 +51,7 @@ test("remember reports requires_confirmation without confirming", async () => {
     payload: { status: "requires_confirmation", would_replace_or_update: [{ id: "m9" }] },
     isError: false,
   }));
-  const outcome = await new McpSiloStore(client, "default", (l) => logs.push(l)).remember(memory);
+  const outcome = await new McpSiloStore(client, new SiloBucketRouter(), (l) => logs.push(l)).remember(memory);
   assert.deepEqual(outcome, { status: "needs_confirmation" });
   assert.equal(calls.length, 1); // no second confirmed=true call
   assert.match(logs.join("\n"), /requires confirmation/);
@@ -81,24 +82,47 @@ test("recall maps silo_recall hits and recovers provenance from the trailer", as
   assert.equal(results[0]!.memory.source.createdAt, 1_753_000_000);
 });
 
-test("recall honors the channelId filter (client-side, fetching the tool max)", async () => {
-  const { client, calls } = fakeMcp(() => ({
-    payload: {
-      memories: [
-        { id: "m1", content: trailered("eng", "eng memory"), score: 0.9 },
-        { id: "m2", content: trailered("support", "support memory"), score: 0.8 },
-      ],
-    },
-    isError: false,
-  }));
-  const results = await new McpSiloStore(client).recall({
-    text: "memory",
-    channelId: "support",
-    limit: 5,
-  });
-  assert.equal(calls[0]!.args.max_results, 25); // tool max when channel-filtering
-  assert.equal(results.length, 1);
-  assert.equal(results[0]!.memory.source.channelId, "support");
+test("operations route to the channel's memory bucket", async () => {
+  const router = SiloBucketRouter.fromEnv("default", "eng=silo-eng, finance=silo-shared");
+  const { client, calls } = fakeMcp(() => ({ payload: { status: "queued", memories: [], deleted: ["x"] }, isError: false }));
+  const store = new McpSiloStore(client, router);
+
+  await store.remember(memory); // source.channelId = "eng"
+  assert.equal(calls[0]!.args.silo_id, "silo-eng");
+  await store.recall({ text: "q", channelId: "finance" });
+  assert.equal(calls[1]!.args.silo_id, "silo-shared");
+  await store.recall({ text: "q", channelId: "random" }); // unmapped → default
+  assert.equal(calls[2]!.args.silo_id, "default");
+  await store.ask("q", "eng");
+  assert.equal(calls[3]!.args.silo_id, "silo-eng");
+  await store.forget("m1", "finance");
+  assert.equal(calls[4]!.args.silo_id, "silo-shared");
+});
+
+test("init logs scope and warns on buckets outside the connection's grants", async () => {
+  const logs: string[] = [];
+  const router = SiloBucketRouter.fromEnv("default", "eng=silo-known,ops=silo-unknown");
+  const { client } = fakeMcp((name) =>
+    name === "silo_get_scope"
+      ? {
+          payload: {
+            silos: [
+              { id: "silo-known", title: "Team memory", is_default: false },
+              { id: "silo-abc", title: "Personal", is_default: true },
+            ],
+            default_silo_id: "silo-abc",
+            available_shapes: [{ shape: "memory" }, { shape: "messages" }],
+          },
+          isError: false,
+        }
+      : { payload: {}, isError: false }
+  );
+  await new McpSiloStore(client, router, (l) => logs.push(l)).init();
+  const joined = logs.join("\n");
+  assert.match(joined, /2 silo\(s\)/);
+  assert.match(joined, /messages/);
+  assert.match(joined, /warning: configured bucket "silo-unknown"/);
+  assert.doesNotMatch(joined, /"silo-known" is not/);
 });
 
 test("ask relays the silo-composed answer", async () => {

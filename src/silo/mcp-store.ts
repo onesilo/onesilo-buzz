@@ -3,6 +3,8 @@
  * the agent is a standard MCP client (see mcp-client.ts / oauth.ts), so this
  * store uses only tools every other MCP client already uses:
  *
+ *   silo_get_scope       discovery: silos + granted shapes this connection
+ *                        can reach (run once at startup via init())
  *   silo_remember        capture (async ingestion + enrichment pipeline)
  *   silo_recall          Pinecone-backed semantic recall (scored memories)
  *   silo_ask             silo-composed, grounded answer (relayed verbatim)
@@ -10,13 +12,16 @@
  *   silo_search_memories deterministic scan (recent/list fallback)
  *   silo_get_context     silo overview (backs !memories)
  *
- * silo_id is the reserved alias "default": every MCP connection gets an
- * auto-provisioned default cloud silo, so a freshly paired Buzz agent has a
- * working memory with zero silo configuration — and the silo (plus the
- * connection) is visible/manageable in the Silo dashboard.
+ * Memory buckets: every operation routes through a SiloBucketRouter mapping
+ * the interaction's Buzz channel to a silo id. The default bucket is the
+ * reserved alias "default" (the connection's auto-provisioned silo), so a
+ * freshly paired agent works with zero configuration; channels can be mapped
+ * to other silos the connection has been granted (SILO_CHANNEL_MAP), and
+ * multiple agents pointed at the same silo id share one memory.
  */
 
 import type { McpClient } from "./mcp-client.js";
+import { SiloBucketRouter } from "./buckets.js";
 import type {
   Memory,
   MemoryKind,
@@ -35,21 +40,69 @@ interface RecallHit {
   score?: number;
 }
 
+interface ScopeSilo {
+  id?: string;
+  silo_id?: string;
+  title?: string;
+  is_default?: boolean;
+}
+
 export class McpSiloStore implements MemoryStore {
   constructor(
     private readonly mcp: McpClient,
-    private readonly siloId: string = "default",
+    private readonly router: SiloBucketRouter = new SiloBucketRouter(),
     private readonly log: (line: string) => void = () => {}
   ) {}
 
   /**
-   * Capture via silo_remember. Provenance travels inline as a trailer the
-   * ingestion pipeline keeps with the memory (full author pubkey + unix
-   * timestamp, so recalled memories keep their audit trail). Additive
-   * captures queue immediately; a requires_confirmation response (the new
-   * content would replace existing memories) is surfaced and NOT
-   * auto-confirmed — replacing the silo's memory is the owner's call, not
-   * the agent's.
+   * Discover what this connection can reach (silo_get_scope) and sanity-
+   * check the bucket configuration against it. Non-fatal: an unknown bucket
+   * is logged loudly but the agent still starts (grants may be added from
+   * the dashboard afterwards).
+   */
+  async init(): Promise<void> {
+    const { payload, isError } = await this.mcp.callTool("silo_get_scope", {});
+    if (isError) {
+      this.log(`silo_get_scope failed (continuing): ${describe(payload)}`);
+      return;
+    }
+    const scope = (payload ?? {}) as {
+      silos?: ScopeSilo[];
+      default_silo_id?: string;
+      available_shapes?: Array<{ shape?: string }>;
+    };
+    const silos = scope.silos ?? [];
+    const siloIds = new Set(
+      silos.map((s) => String(s.id ?? s.silo_id ?? "")).filter(Boolean)
+    );
+    const shapes = (scope.available_shapes ?? [])
+      .map((s) => s.shape)
+      .filter(Boolean);
+    this.log(
+      `scope: ${silos.length} silo(s) [${silos
+        .map((s) => `${s.title ?? s.id}${s.is_default ? "*" : ""}`)
+        .join(", ")}], shapes: ${shapes.join(", ") || "(none reported)"}`
+    );
+    for (const bucket of this.router.buckets) {
+      if (bucket === "default") continue; // reserved alias, always valid
+      if (!siloIds.has(bucket)) {
+        this.log(
+          `warning: configured bucket "${bucket}" is not in this connection's ` +
+            `scope — grant the silo to this connection in the Silo dashboard ` +
+            `(Connections → Buzz Agent → Silos) or fix SILO_CHANNEL_MAP/SILO_ID.`
+        );
+      }
+    }
+  }
+
+  /**
+   * Capture via silo_remember into the channel's bucket. Provenance travels
+   * inline as a trailer the ingestion pipeline keeps with the memory (full
+   * author pubkey + unix timestamp, so recalled memories keep their audit
+   * trail). Additive captures queue immediately; a requires_confirmation
+   * response (the new content would replace existing memories) is surfaced
+   * and NOT auto-confirmed — replacing the silo's memory is the owner's
+   * call, not the agent's.
    */
   async remember(memory: Memory): Promise<RememberOutcome> {
     const content =
@@ -58,7 +111,7 @@ export class McpSiloStore implements MemoryStore {
       `channel=${memory.source.channelId} author=${memory.source.authorPubkey} ` +
       `event=${memory.source.eventId} ts=${memory.source.createdAt}]`;
     const { payload, isError } = await this.mcp.callTool("silo_remember", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(memory.source.channelId),
       content,
     });
     if (isError) throw new Error(`silo_remember failed: ${describe(payload)}`);
@@ -72,34 +125,27 @@ export class McpSiloStore implements MemoryStore {
     return { status: "queued" };
   }
 
+  /**
+   * Semantic recall from the channel's bucket. Recall is bucket-wide by
+   * design: channels sharing a bucket share memory.
+   */
   async recall(query: MemoryQuery): Promise<ScoredMemory[]> {
     const limit = query.limit ?? 5;
     const { payload, isError } = await this.mcp.callTool("silo_recall", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(query.channelId),
       query: query.text,
-      // Channel filtering is client-side and best-effort: fetch the tool's
-      // maximum, but if every top semantic match lives in other channels
-      // the requested channel can still come back empty. A server-side
-      // channel filter on silo_recall is the real fix (see README roadmap).
-      max_results: query.channelId ? 25 : Math.min(25, limit),
+      max_results: Math.min(25, limit),
     });
     if (isError) throw new Error(`silo_recall failed: ${describe(payload)}`);
     const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
-    const out: ScoredMemory[] = [];
-    for (const h of hits) {
-      const memory = toMemory(h);
-      if (query.channelId && memory.source.channelId !== query.channelId) continue;
-      out.push({ memory, score: h.score ?? 0 });
-      if (out.length >= limit) break;
-    }
-    return out;
+    return hits.slice(0, limit).map((h) => ({ memory: toMemory(h), score: h.score ?? 0 }));
   }
 
-  async ask(question: string): Promise<string> {
+  async ask(question: string, channelId?: string): Promise<string> {
     const { payload, isError } = await this.mcp.callTool("silo_ask", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(channelId),
       question,
     });
     if (isError) throw new Error(`silo_ask failed: ${describe(payload)}`);
@@ -108,17 +154,17 @@ export class McpSiloStore implements MemoryStore {
     return answer.answer ?? answer.response ?? JSON.stringify(payload);
   }
 
-  async overview(): Promise<string> {
+  async overview(channelId?: string): Promise<string> {
     const { payload, isError } = await this.mcp.callTool("silo_get_context", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(channelId),
     });
     if (isError) throw new Error(`silo_get_context failed: ${describe(payload)}`);
     return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   }
 
-  async forget(memoryId: string): Promise<boolean> {
+  async forget(memoryId: string, channelId?: string): Promise<boolean> {
     const { payload, isError } = await this.mcp.callTool("silo_forget", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(channelId),
       memory_ids: [memoryId],
     });
     // A tool error is a failure, not "no such memory" — throw so the agent
@@ -133,7 +179,7 @@ export class McpSiloStore implements MemoryStore {
   /** Deterministic scan; used only when overview() isn't the better fit. */
   async recent(channelId: string | undefined, limit: number): Promise<Memory[]> {
     const { payload, isError } = await this.mcp.callTool("silo_search_memories", {
-      silo_id: this.siloId,
+      silo_id: this.router.resolve(channelId),
       query: channelId ? `channel=${channelId}` : "[buzz",
     });
     if (isError) throw new Error(`silo_search_memories failed: ${describe(payload)}`);

@@ -33,15 +33,14 @@ test("recall ranks by token overlap", async () => {
   assert.ok(!results.some((r) => /lunch/.test(r.memory.content)));
 });
 
-test("channel filter restricts recall; omitting it is silo-wide", async () => {
+test("recall is bucket-wide: channels share memory within the store", async () => {
   const store = new LocalSiloStore();
   await store.remember(mem("deploy freeze on Friday", "eng"));
   await store.remember(mem("freeze the marketing budget", "marketing"));
-  const engOnly = await store.recall({ text: "freeze", channelId: "eng" });
-  assert.equal(engOnly.length, 1);
-  assert.equal(engOnly[0]!.memory.source.channelId, "eng");
-  const all = await store.recall({ text: "freeze" });
-  assert.equal(all.length, 2);
+  // channelId selects the bucket (a single bucket here), never narrows
+  // recall — a decision in #eng is recallable from #support.
+  const fromSupport = await store.recall({ text: "freeze", channelId: "support" });
+  assert.equal(fromSupport.length, 2);
 });
 
 test("salience boosts ranking between equal matches", async () => {

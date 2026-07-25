@@ -192,20 +192,20 @@ export class SiloMemoryAgent {
       }
       case "recall": {
         if (!arg) return this.reply(msg, "Usage: !recall <query>");
-        return this.reply(msg, await this.answer(arg));
+        return this.reply(msg, await this.answer(arg, msg.channelId));
       }
       case "memories": {
         // Channel-scoped recent list first; if the store has nothing for
         // this channel but can compose a silo-wide overview, use that.
         const recent = await this.store.recent(msg.channelId, 10);
         if (recent.length === 0 && this.store.overview) {
-          return this.reply(msg, await this.store.overview());
+          return this.reply(msg, await this.store.overview(msg.channelId));
         }
         return this.reply(msg, formatRecent(recent));
       }
       case "forget": {
         if (!arg) return this.reply(msg, "Usage: !forget <memory id>");
-        const removed = await this.store.forget(arg);
+        const removed = await this.store.forget(arg, msg.channelId);
         return this.reply(
           msg,
           removed ? `Forgotten (id ${arg}).` : `No memory with id ${arg}.`
@@ -227,7 +227,7 @@ export class SiloMemoryAgent {
         "Hi! I give this workspace memory via Silo. Try `!recall <query>`, `!remember <text>`, or `!memories`."
       );
     }
-    await this.reply(msg, await this.answer(query));
+    await this.reply(msg, await this.answer(query, msg.channelId));
     // Questions addressed to the agent are requests for memory, not memory
     // — but a mention can also carry a statement worth keeping
     // ("@silo we decided to ship Friday"). Distill the mention-stripped
@@ -248,11 +248,11 @@ export class SiloMemoryAgent {
    * answer itself (silo_ask), relay it verbatim — the silo's voice is the
    * product. Otherwise recall raw memories and format locally.
    */
-  private async answer(query: string): Promise<string> {
+  private async answer(query: string, channelId?: string): Promise<string> {
     if (this.store.ask) {
-      return this.store.ask(query);
+      return this.store.ask(query, channelId);
     }
-    const results = await this.store.recall({ text: query, limit: 5 });
+    const results = await this.store.recall({ text: query, channelId, limit: 5 });
     return formatRecall(query, results, this.names);
   }
 

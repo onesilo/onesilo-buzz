@@ -11,8 +11,10 @@ export interface Config {
         mode: "mcp";
         /** Control-plane origin, e.g. https://api.onesilo.com */
         serverUrl: string;
-        /** Cloud silo to use; "default" = the connection's auto-provisioned silo. */
+        /** Default memory bucket; "default" = the connection's auto-provisioned silo. */
         siloId: string;
+        /** Raw "channel=silo_id,..." map for per-channel memory buckets. */
+        channelMap: string;
         tokenPath: string;
         callbackPort: number;
       };
@@ -34,6 +36,7 @@ export function loadConfig(env = process.env): Config {
             mode,
             serverUrl: env.SILO_SERVER_URL ?? "https://api.onesilo.com",
             siloId: env.SILO_ID ?? "default",
+            channelMap: env.SILO_CHANNEL_MAP ?? "",
             tokenPath: env.SILO_TOKEN_PATH ?? ".silo/oauth.json",
             callbackPort: parsePort(env.SILO_OAUTH_CALLBACK_PORT, 8765),
           }

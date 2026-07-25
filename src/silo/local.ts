@@ -54,15 +54,17 @@ export class LocalSiloStore implements MemoryStore {
     return { status: "stored", id: memory.id };
   }
 
+  /**
+   * Bucket-wide recall: the local store is a single bucket, so channelId
+   * routes nowhere and memory is shared across all channels — matching the
+   * MCP store's semantics.
+   */
   async recall(query: MemoryQuery): Promise<ScoredMemory[]> {
     const qTokens = tokenize(query.text);
     if (qTokens.length === 0) return [];
     const now = Math.floor(Date.now() / 1000);
     const scored: ScoredMemory[] = [];
     for (const memory of this.memories.values()) {
-      if (query.channelId && memory.source.channelId !== query.channelId) {
-        continue;
-      }
       const mTokens = new Set([
         ...tokenize(memory.content),
         ...memory.tags.map((t) => t.toLowerCase()),
@@ -79,7 +81,7 @@ export class LocalSiloStore implements MemoryStore {
     return scored.slice(0, query.limit ?? 5);
   }
 
-  async forget(memoryId: string): Promise<boolean> {
+  async forget(memoryId: string, _channelId?: string): Promise<boolean> {
     const existed = this.memories.delete(memoryId);
     if (existed) this.persist();
     return existed;

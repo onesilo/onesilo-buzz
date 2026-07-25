@@ -143,6 +143,27 @@ The agent speaks two open protocols and nothing else:
 | `src/connect.ts` | One-time OAuth pairing CLI |
 | `demo/` | Scripted end-to-end walkthrough |
 
+## Memory buckets & shared memory
+
+Memory lives in **silos**, and one agent isn't limited to one:
+
+- **Multiple buckets per agent.** Map channels to different silos with
+  `SILO_CHANNEL_MAP` (e.g. `eng=<silo-id>,support=<silo-id>`); unmapped
+  channels use the default bucket (`SILO_ID`, normally the agent's own
+  auto-provisioned silo). Capture and recall route per channel, so `#exec`
+  can keep a separate memory from `#eng` while both are served by the same
+  agent. Recall is **bucket-wide**: channels sharing a bucket share memory.
+- **Shared memory across agents.** Silos are addressable by id, and a
+  connection can be granted access to any number of them from the
+  dashboard (**Connections → your Buzz agent → Silos**). Point two agents —
+  different workspaces, different machines, different keypairs — at the
+  same silo id and they read and write one shared memory, each still
+  individually visible, rate-limitable, and revocable in the dashboard.
+- **Scope-aware startup.** On boot the agent calls `silo_get_scope`, logs
+  the silos and shapes its connection can reach, and warns about any
+  configured bucket the connection hasn't been granted — so a
+  misconfigured map fails loudly at startup, not silently at capture time.
+
 ## Configuration
 
 Everything is environment-driven — see [`.env.example`](.env.example).
@@ -155,7 +176,8 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
 | `SILO_MODE` | `mcp` | `mcp` (Silo platform) or `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://api.onesilo.com` | Silo control plane |
-| `SILO_ID` | `default` | Which silo to use (`default` = the agent's own) |
+| `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
+| `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |
 | `SILO_TOKEN_PATH` | `.silo/oauth.json` | Where OAuth tokens persist |
 
 ## Privacy & control
