@@ -128,6 +128,15 @@ test("bootstraps via refresh when only a refresh token is stored", async () => {
   assert.equal(oauth.refreshes, 1);
 });
 
+test("an empty initialize response does not mark the session ready", async () => {
+  stubFetch(() => new Response(null, { status: 202 }));
+  const client = new McpClient(URL_, fakeOauth(["tok"]));
+  await assert.rejects(
+    () => client.callTool("silo_recall", { silo_id: "default", query: "x" }),
+    /initialize returned an empty response/
+  );
+});
+
 test("an empty tools/call response is an error, not a silent success", async () => {
   stubFetch((req) => {
     if (req.body.method === "initialize") {

@@ -76,6 +76,9 @@ export class McpClient {
         clientInfo: this.clientInfo,
       },
     });
+    if (rpc === undefined) {
+      throw new Error("MCP initialize returned an empty response");
+    }
     const error = (rpc as { error?: { message?: string } })?.error;
     if (error) throw new Error(`MCP initialize failed: ${error.message}`);
     await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });

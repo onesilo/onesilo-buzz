@@ -74,6 +74,12 @@ export class WebSocketRelay implements BuzzRelay {
     this.ws = ws;
     let opened = false;
     ws.on("open", () => {
+      if (this.closed) {
+        // close() ran while this socket was still connecting — shut it
+        // down instead of subscribing past shutdown.
+        ws.close();
+        return;
+      }
       if (this.ws !== ws) return; // superseded by a newer socket
       opened = true;
       this.reconnectDelayMs = 1000;
