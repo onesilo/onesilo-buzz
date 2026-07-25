@@ -56,6 +56,13 @@ export class WebSocketRelay implements BuzzRelay {
   private recentlySent: NostrEvent[] = [];
   private static readonly RECENT_MAX = WebSocketRelay.OUTBOX_MAX;
 
+  /**
+   * Live-tail floor, stamped at construction rather than subscribe time:
+   * startup work between construction and the first REQ (OAuth checks,
+   * silo_get_scope) must not open a gap of missed messages.
+   */
+  private readonly sinceFloor = Math.floor(Date.now() / 1000);
+
   constructor(
     private readonly url: string,
     private readonly identity: AgentIdentity,
@@ -191,8 +198,10 @@ export class WebSocketRelay implements BuzzRelay {
     this.handlers.set(subId, onEvent);
     const filter: Record<string, unknown> = {
       kinds: [KIND_CHANNEL_MESSAGE],
-      // live tail only; backfill is a deliberate non-goal for the prototype
-      since: Math.floor(Date.now() / 1000),
+      // Live tail only (backfill is a deliberate non-goal), floored at
+      // construction so startup work can't open a gap; the agent's event
+      // dedup absorbs any overlap.
+      since: this.sinceFloor,
     };
     if (channelIds.length > 0) filter[`#${CHANNEL_TAG}`] = channelIds;
     this.subscriptions.set(subId, filter);
