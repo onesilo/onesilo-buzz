@@ -39,6 +39,13 @@ const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/;
 
 const SEEN_EVENTS_MAX = 2000;
 
+/** A reply that failed to reach the relay — distinct from a silo failure. */
+class DeliveryError extends Error {
+  constructor(cause: unknown) {
+    super(`reply delivery failed: ${cause}`);
+  }
+}
+
 export class SiloMemoryAgent {
   private readonly names: Map<string, string>;
   private readonly log: (line: string) => void;
@@ -123,6 +130,12 @@ export class SiloMemoryAgent {
     try {
       await handler();
     } catch (err) {
+      if (err instanceof DeliveryError) {
+        // The silo work succeeded; only the reply couldn't reach the relay.
+        // An apology would be wrong ("silo error") and undeliverable anyway.
+        this.log(`could not deliver reply ${msg.event.id.slice(0, 8)}: ${err.message}`);
+        return;
+      }
       this.log(`error answering ${msg.event.id.slice(0, 8)}: ${err}`);
       try {
         await this.reply(
@@ -244,7 +257,11 @@ export class SiloMemoryAgent {
   }
 
   private async reply(to: ChannelMessage, content: string): Promise<void> {
-    await this.relay.publish(buildReply(to, content));
+    try {
+      await this.relay.publish(buildReply(to, content));
+    } catch (err) {
+      throw new DeliveryError(err);
+    }
     this.log(`replied in ${to.channelId}: ${content.split("\n")[0]}`);
   }
 }

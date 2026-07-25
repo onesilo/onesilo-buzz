@@ -45,6 +45,14 @@ export class WebSocketRelay implements BuzzRelay {
     reject: (err: Error) => void;
   }> = [];
   private static readonly OUTBOX_MAX = 1000;
+  /**
+   * Ring buffer of recently sent events, re-sent after a NIP-42 AUTH
+   * exchange: a relay that enforces auth-before-publish drops EVENTs sent
+   * in the window between socket-open and auth completion. Re-sending is
+   * safe — relays deduplicate by event id.
+   */
+  private recentlySent: NostrEvent[] = [];
+  private static readonly RECENT_MAX = 50;
 
   constructor(
     private readonly url: string,
@@ -90,7 +98,7 @@ export class WebSocketRelay implements BuzzRelay {
       const pending = this.outbox;
       this.outbox = [];
       for (const p of pending) {
-        ws.send(JSON.stringify(["EVENT", p.event]));
+        this.sendEvent(ws, p.event);
         p.resolve(p.event);
       }
       onOpen?.();
@@ -142,12 +150,24 @@ export class WebSocketRelay implements BuzzRelay {
         this.identity.secretKey
       );
       this.ws?.send(JSON.stringify(["AUTH", auth]));
-      // A relay that enforces auth-before-subscribe drops REQs sent before
-      // the challenge completed. Replaying every subscription is safe: a
-      // REQ with an existing sub id simply replaces that subscription.
+      // A relay that enforces auth-before-subscribe/publish drops REQs and
+      // EVENTs sent before the challenge completed. Replaying both is
+      // safe: a REQ with an existing sub id replaces that subscription,
+      // and relays deduplicate EVENTs by id.
       for (const [subId, filter] of this.subscriptions) {
         this.ws?.send(JSON.stringify(["REQ", subId, filter]));
       }
+      for (const event of this.recentlySent) {
+        this.ws?.send(JSON.stringify(["EVENT", event]));
+      }
+    }
+  }
+
+  private sendEvent(ws: WebSocket, event: NostrEvent): void {
+    ws.send(JSON.stringify(["EVENT", event]));
+    this.recentlySent.push(event);
+    if (this.recentlySent.length > WebSocketRelay.RECENT_MAX) {
+      this.recentlySent.shift();
     }
   }
 
@@ -169,7 +189,7 @@ export class WebSocketRelay implements BuzzRelay {
     if (this.closed) return Promise.reject(new Error("relay closed"));
     const event = finalizeEvent(template, this.identity.secretKey);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(["EVENT", event]));
+      this.sendEvent(this.ws, event);
       return Promise.resolve(event);
     }
     // Mid-reconnect: hold the signed event and settle the promise only when

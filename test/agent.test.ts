@@ -180,6 +180,38 @@ test("passive ingest logs held captures instead of claiming success", async () =
   assert.doesNotMatch(logs.join("\n"), /^remembered/m);
 });
 
+test("a publish failure after a successful store op does not claim a silo error", async () => {
+  const identity = loadIdentity("silo");
+  const store = new LocalSiloStore();
+  const logs: string[] = [];
+  const deadRelay = {
+    connect: async () => {},
+    subscribeChannels: () => {},
+    publish: async () => {
+      throw new Error("relay outbox overflow");
+    },
+    close: () => {},
+  };
+  const agent = new SiloMemoryAgent(deadRelay, store, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  await agent.handleEvent(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!remember the oncall doc lives in Notion",
+      },
+      generateSecretKey()
+    )
+  );
+  assert.equal(store.size, 1); // the store op itself succeeded
+  assert.match(logs.join("\n"), /could not deliver reply/);
+  assert.doesNotMatch(logs.join("\n"), /error answering/); // no false silo error
+});
+
 test("silo errors on commands produce an apologetic reply", async () => {
   const identity = loadIdentity("silo");
   const relay = new FakeRelay(identity.secretKey);
