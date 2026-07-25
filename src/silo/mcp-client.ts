@@ -82,6 +82,11 @@ export class McpClient {
       method: "tools/call",
       params: { name, arguments: args },
     });
+    if (rpc === undefined) {
+      // 202/empty bodies are valid for notifications, never for tools/call
+      // — treating one as success would fake a successful capture.
+      throw new Error(`${name} returned an empty response`);
+    }
     const error = (rpc as { error?: { message?: string } })?.error;
     if (error) throw new Error(`${name} failed: ${error.message}`);
     const result = ((rpc as { result?: Record<string, unknown> })?.result ?? {}) as Record<string, unknown>;

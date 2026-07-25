@@ -24,7 +24,7 @@ import {
 } from "./buzz/events.js";
 import type { AgentIdentity } from "./buzz/identity.js";
 import type { MemoryStore } from "./silo/types.js";
-import { extractMemories, explicitMemory } from "./memory/extractor.js";
+import { extractMemories, explicitMemory, isQuestion } from "./memory/extractor.js";
 import { formatRecall, formatRecent } from "./memory/recall.js";
 
 export interface AgentOptions {
@@ -102,7 +102,14 @@ export class SiloMemoryAgent {
       return;
     }
 
-    await this.ingest(msg);
+    try {
+      await this.ingest(msg);
+    } catch (err) {
+      // The capture failed, so un-mark the event: a relay redelivery is
+      // this message's only retry path and must not be swallowed by dedup.
+      this.seenEventIds.delete(event.id);
+      throw err;
+    }
   }
 
   /**
@@ -203,9 +210,13 @@ export class SiloMemoryAgent {
       );
     }
     await this.reply(msg, await this.answer(query));
-    // Deliberately NOT ingested: questions addressed to the agent are
-    // requests for memory, not memory — capturing them as decisions/facts
-    // would pollute the silo.
+    // Questions addressed to the agent are requests for memory, not memory
+    // — but a mention can also carry a statement worth keeping
+    // ("@silo we decided to ship Friday"). Distill the mention-stripped
+    // text unless it reads as a question.
+    if (!isQuestion(query)) {
+      await this.ingest({ ...msg, content: query });
+    }
   }
 
   /**

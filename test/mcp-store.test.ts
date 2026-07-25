@@ -131,6 +131,24 @@ test("tool errors surface as thrown errors, not fake success", async () => {
   await assert.rejects(() => store.remember(memory), /silo_remember failed/);
   await assert.rejects(() => store.ask("q"), /silo_ask failed/);
   await assert.rejects(() => store.recall({ text: "q" }), /silo_recall failed/);
+  // A forget tool error must not read as "no such memory".
+  await assert.rejects(() => store.forget("m1"), /silo_forget failed/);
+});
+
+test("recent sorts newest-first by parsed timestamp", async () => {
+  const at = (ts: number, text: string) =>
+    `${text}\n\n[buzz kind=fact salience=0.4 channel=eng author=pk event=e${ts} ts=${ts}]`;
+  const { client } = fakeMcp(() => ({
+    payload: {
+      memories: [
+        { id: "old", content: at(1_753_000_000, "older") },
+        { id: "new", content: at(1_753_000_500, "newer") },
+      ],
+    },
+    isError: false,
+  }));
+  const recent = await new McpSiloStore(client).recent("eng", 10);
+  assert.deepEqual(recent.map((m) => m.content), ["newer", "older"]);
 });
 
 test("a forged trailer in user content cannot spoof provenance", async () => {

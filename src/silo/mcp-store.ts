@@ -121,7 +121,9 @@ export class McpSiloStore implements MemoryStore {
       silo_id: this.siloId,
       memory_ids: [memoryId],
     });
-    if (isError) return false;
+    // A tool error is a failure, not "no such memory" — throw so the agent
+    // apologizes instead of claiming the id doesn't exist.
+    if (isError) throw new Error(`silo_forget failed: ${describe(payload)}`);
     // Only report success on confirmed deletion — an unexpected payload
     // shape must not read as "forgotten".
     const deleted = (payload as { deleted?: unknown[] })?.deleted;
@@ -143,6 +145,7 @@ export class McpSiloStore implements MemoryStore {
       // The substring query pre-filters, but verify against the parsed
       // trailer so cross-channel matches never leak into !memories.
       .filter((m) => !channelId || m.source.channelId === channelId)
+      .sort((a, b) => b.source.createdAt - a.source.createdAt)
       .slice(0, limit);
   }
 }

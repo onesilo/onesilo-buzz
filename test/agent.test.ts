@@ -80,6 +80,50 @@ test("!remember stores verbatim and !forget removes it", async () => {
   assert.match(relay.published.at(-1)!.content, /Forgotten/);
 });
 
+test("a statement in a mention is answered AND captured; a question is not captured", async () => {
+  const { identity, relay, store, say } = await setup();
+  say("@silo we decided to ship the payments migration on Friday", "eng", [["p", identity.pubkey]]);
+  await settle();
+  assert.equal(relay.published.length, 1); // answered
+  assert.equal(store.size, 1); // and the decision was captured
+  say("@silo what did we decide about the payments migration?", "eng", [["p", identity.pubkey]]);
+  await settle();
+  assert.equal(relay.published.length, 2);
+  assert.equal(store.size, 1); // the question itself was not stored
+});
+
+test("a failed passive capture is retryable via redelivery", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  let attempts = 0;
+  const flaky: MemoryStore = {
+    remember: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient silo outage");
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, flaky, identity);
+  await agent.start();
+  const event = finalizeEvent(
+    {
+      kind: KIND_CHANNEL_MESSAGE,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [[CHANNEL_TAG, "eng"]],
+      content: "we decided to ship the payments migration on Friday",
+    },
+    generateSecretKey()
+  );
+  relay.deliver(event);
+  await settle();
+  relay.deliver(event); // redelivery retries because the first capture failed
+  await settle();
+  assert.equal(attempts, 2);
+});
+
 test("a p tag alone does not trigger a reply (listen unless spoken to)", async () => {
   const { identity, relay, say } = await setup();
   say("heads up: deploy happening later for the payments team", "eng", [["p", identity.pubkey]]);

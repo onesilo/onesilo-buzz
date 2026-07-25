@@ -101,6 +101,20 @@ test("401 triggers one refresh and a retry with the new token", async () => {
   assert.ok(calls.some((c) => c.headers["authorization"] === "Bearer fresh"));
 });
 
+test("an empty tools/call response is an error, not a silent success", async () => {
+  stubFetch((req) => {
+    if (req.body.method === "initialize") {
+      return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: {} });
+    }
+    return new Response(null, { status: 202 }); // empty body for tools/call
+  });
+  const client = new McpClient(URL_, fakeOauth(["tok"]));
+  await assert.rejects(
+    () => client.callTool("silo_remember", { silo_id: "default", content: "x" }),
+    /empty response/
+  );
+});
+
 test("parses single-event SSE response bodies", async () => {
   stubFetch((req) => {
     if (req.body.method === "initialize") {
