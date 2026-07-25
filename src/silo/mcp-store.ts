@@ -162,9 +162,23 @@ export class McpSiloStore implements MemoryStore {
     return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   }
 
+  /**
+   * Delete by id. Tries the channel's bucket first, then every other
+   * configured bucket — a memory id shown by cross-bucket recall must stay
+   * deletable even when !forget is issued from a channel mapped elsewhere.
+   */
   async forget(memoryId: string, channelId?: string): Promise<boolean> {
+    const primary = this.router.resolve(channelId);
+    const buckets = [primary, ...this.router.buckets.filter((b) => b !== primary)];
+    for (const siloId of buckets) {
+      if (await this.forgetIn(siloId, memoryId)) return true;
+    }
+    return false;
+  }
+
+  private async forgetIn(siloId: string, memoryId: string): Promise<boolean> {
     const { payload, isError } = await this.mcp.callTool("silo_forget", {
-      silo_id: this.router.resolve(channelId),
+      silo_id: siloId,
       memory_ids: [memoryId],
     });
     // A tool error is a failure, not "no such memory" — throw so the agent

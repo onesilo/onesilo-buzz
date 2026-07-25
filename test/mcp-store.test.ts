@@ -99,6 +99,22 @@ test("operations route to the channel's memory bucket", async () => {
   assert.equal(calls[4]!.args.silo_id, "silo-shared");
 });
 
+test("forget falls back across buckets when the command channel's bucket misses", async () => {
+  const router = SiloBucketRouter.fromEnv("default", "eng=silo-eng");
+  const { client, calls } = fakeMcp((_name, args) => ({
+    payload: { deleted: args.silo_id === "silo-eng" ? ["m1"] : [] },
+    isError: false,
+  }));
+  // Issued from an unmapped channel (→ default bucket), but the memory
+  // lives in eng's bucket.
+  const removed = await new McpSiloStore(client, router).forget("m1", "random");
+  assert.equal(removed, true);
+  assert.deepEqual(
+    calls.map((c) => c.args.silo_id),
+    ["default", "silo-eng"]
+  );
+});
+
 test("init logs scope and warns on buckets outside the connection's grants", async () => {
   const logs: string[] = [];
   const router = SiloBucketRouter.fromEnv("default", "eng=silo-known,ops=silo-unknown");

@@ -88,13 +88,13 @@ export class SiloMemoryAgent {
   async handleEvent(event: NostrEvent): Promise<void> {
     if (event.pubkey === this.identity.pubkey) return; // never eat our own replies
     if (this.seenEventIds.has(event.id)) return;
+    const msg = parseChannelMessage(event);
+    if (!msg) return; // not marked seen: re-parsing a redelivery is cheap
     this.seenEventIds.add(event.id);
     if (this.seenEventIds.size > SEEN_EVENTS_MAX) {
       const oldest = this.seenEventIds.values().next().value;
       if (oldest) this.seenEventIds.delete(oldest);
     }
-    const msg = parseChannelMessage(event);
-    if (!msg) return;
 
     const command = msg.content.trim().match(COMMAND);
     if (command) {
@@ -237,7 +237,11 @@ export class SiloMemoryAgent {
         await this.ingest({ ...msg, content: query });
       } catch (err) {
         // The answer already landed — a capture failure here must not send
-        // a confusing second (error) reply; it only hits the log.
+        // a confusing second (error) reply; it only hits the log. The event
+        // deliberately STAYS marked seen: un-marking (as the passive path
+        // does) would make a relay redelivery answer the mention a second
+        // time, and a duplicated answer is worse than a lost side-capture —
+        // the statement can always be stored explicitly with !remember.
         this.log(`mention capture failed ${msg.event.id.slice(0, 8)}: ${err}`);
       }
     }
