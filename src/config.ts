@@ -5,6 +5,12 @@ export interface Config {
   agentHandle: string;
   agentSecretKeyHex?: string;
   channelIds: string[];
+  /** Conversation-capture tuning (turn window size, overlap, idle flush). */
+  capture: {
+    maxTurns: number;
+    overlapTurns: number;
+    idleFlushMs: number;
+  };
   silo:
     | { mode: "local"; path: string }
     | {
@@ -30,6 +36,11 @@ export function loadConfig(env = process.env): Config {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    capture: {
+      maxTurns: parseCount(env.CAPTURE_WINDOW_TURNS, 12),
+      overlapTurns: parseCount(env.CAPTURE_OVERLAP_TURNS, 2, 0),
+      idleFlushMs: parseCount(env.CAPTURE_IDLE_FLUSH_SECONDS, 600) * 1000,
+    },
     silo:
       mode === "mcp"
         ? {
@@ -48,4 +59,10 @@ export function loadConfig(env = process.env): Config {
 function parsePort(value: string | undefined, fallback: number): number {
   const port = parseInt(value ?? "", 10);
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback;
+}
+
+/** Non-negative integer env parse with a fallback (min defaults to 1). */
+function parseCount(value: string | undefined, fallback: number, min = 1): number {
+  const n = parseInt(value ?? "", 10);
+  return Number.isInteger(n) && n >= min ? n : fallback;
 }

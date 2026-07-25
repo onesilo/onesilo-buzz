@@ -39,9 +39,12 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ## What the agent does
 
-- **Listens quietly.** In channels it's been added to, it distills messages
-  into typed memories — decisions, facts, preferences, action items — with a
-  salience score. Small talk is ignored. It never speaks unless spoken to.
+- **Listens quietly, in context.** In channels it's been added to, it
+  buffers conversation into rolling turn windows and captures whole
+  **episodes** — speaker-attributed transcripts — so "yeah let's do that"
+  is remembered *with* the turns that give it meaning. Decision-like turns
+  flush their window immediately; the rest flush when the episode goes
+  quiet. It never speaks unless spoken to.
 - **Remembers on demand.** `!remember <text>` stores something verbatim.
 - **Answers from memory.** `@silo <question>` or `!recall <query>` returns a
   grounded answer composed from the silo's memory. A decision made in `#eng`
@@ -135,6 +138,19 @@ The agent speaks two open protocols and nothing else:
   own memory. Memory-replacing writes are surfaced for owner confirmation,
   never auto-applied by the agent.
 
+**Conversation-aware capture.** The agent is a *segmenter*, not a
+distiller: it decides where a conversational episode begins and ends, and
+One Silo's server-side pipeline does the semantic work with full turn
+context. An episode flushes when a decision-like turn appears (immediately,
+so it's recallable fast), when the window fills (`CAPTURE_WINDOW_TURNS`),
+or when the channel goes quiet (`CAPTURE_IDLE_FLUSH_SECONDS`); the last
+`CAPTURE_OVERLAP_TURNS` turns carry into the next segment so episodes that
+span a flush keep their thread. Failed captures are retained and retried on
+the next flush. Note the privacy posture this implies: **raw conversation
+transcripts from the agent's channels are sent to your silo** (not just
+distilled one-liners) — only add the agent to channels whose content
+belongs in that memory.
+
 | Path | What it is |
 | --- | --- |
 | `src/buzz/` | Nostr protocol surface: event parsing, agent identity, relay transport, and an in-process fake relay for demo/tests |
@@ -180,6 +196,9 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
 | `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |
 | `SILO_TOKEN_PATH` | `.silo/oauth.json` | Where OAuth tokens persist |
+| `CAPTURE_WINDOW_TURNS` | `12` | Turns buffered before a segment flushes |
+| `CAPTURE_OVERLAP_TURNS` | `2` | Turns carried into the next segment as context |
+| `CAPTURE_IDLE_FLUSH_SECONDS` | `600` | Quiet time that closes an episode |
 
 ## Privacy & control
 

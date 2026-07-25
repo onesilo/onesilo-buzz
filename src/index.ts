@@ -55,6 +55,7 @@ if (config.silo.mode === "mcp") {
 const relay = new WebSocketRelay(config.relayUrl, identity, log);
 const agent = new SiloMemoryAgent(relay, store, identity, {
   channelIds: config.channelIds,
+  capture: config.capture,
   log,
 });
 
@@ -71,6 +72,12 @@ main().catch((err) => {
 });
 
 process.on("SIGINT", () => {
-  relay.close();
-  process.exit(0);
+  // Flush pending conversation buffers before going down, then close.
+  void agent
+    .stop()
+    .catch((err) => console.error("shutdown flush failed:", err))
+    .finally(() => {
+      relay.close();
+      process.exit(0);
+    });
 });

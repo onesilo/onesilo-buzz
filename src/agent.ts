@@ -24,14 +24,27 @@ import {
 } from "./buzz/events.js";
 import type { AgentIdentity } from "./buzz/identity.js";
 import type { MemoryStore } from "./silo/types.js";
-import { extractMemories, explicitMemory, isQuestion } from "./memory/extractor.js";
+import {
+  extractMemories,
+  explicitMemory,
+  isQuestion,
+  isSalient,
+} from "./memory/extractor.js";
 import { formatRecall, formatRecent } from "./memory/recall.js";
+import {
+  TurnWindowManager,
+  type TranscriptSegment,
+  type Turn,
+  type WindowOptions,
+} from "./memory/window.js";
 
 export interface AgentOptions {
   /** Channels to join; [] = everything the relay lets us see. */
   channelIds?: string[];
   /** pubkey -> display name, for provenance lines in replies. */
   names?: Map<string, string>;
+  /** Conversation-capture tuning: window size, overlap, idle flush. */
+  capture?: Partial<WindowOptions>;
   log?: (line: string) => void;
 }
 
@@ -59,6 +72,9 @@ export class SiloMemoryAgent {
    * subscriptions make redeliveries older than the window rare.
    */
   private readonly seenEventIds = new Set<string>();
+  /** Rolling per-channel turn buffers; segments flush to the store. */
+  private readonly window: TurnWindowManager;
+  private idleTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly relay: BuzzRelay,
@@ -68,6 +84,9 @@ export class SiloMemoryAgent {
   ) {
     this.names = options.names ?? new Map();
     this.log = options.log ?? (() => {});
+    this.window = new TurnWindowManager(options.capture ?? {}, (segment) =>
+      this.flushSegment(segment)
+    );
   }
 
   async start(): Promise<void> {
@@ -82,7 +101,19 @@ export class SiloMemoryAgent {
         )
       );
     });
+    // Idle episodes flush on a timer; chained onto the queue so flushes
+    // never interleave with in-flight event handling.
+    this.idleTimer = setInterval(() => {
+      this.queue = this.queue.then(() => this.window.flushIdle(Date.now()));
+    }, 30_000);
+    this.idleTimer.unref?.();
     this.log(`silo-memory agent online as ${this.identity.pubkey.slice(0, 12)}… (@${this.identity.handle})`);
+  }
+
+  /** Flush pending conversation buffers and stop timers (shutdown path). */
+  async stop(): Promise<void> {
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    await this.window.flushAll();
   }
 
   async handleEvent(event: NostrEvent): Promise<void> {
@@ -109,26 +140,64 @@ export class SiloMemoryAgent {
       return;
     }
 
+    // Passive path: append to the channel's turn window. Salient turns
+    // flush their window immediately; the rest wait for the size/idle
+    // trigger so whole episodes reach the silo with context. Capture
+    // failures are retried by the window itself (restore + next flush),
+    // so the event stays deduped.
+    await this.window.push(msg.channelId, turnOf(msg), isSalient(msg.content));
+  }
+
+  /**
+   * Deliver a flushed segment to the store. Preferred path: whole-transcript
+   * capture (rememberTranscript) so the silo's server-side pipeline distills
+   * with turn context. Fallback for stores without it: per-turn heuristic
+   * extraction of the fresh turns only (overlap is context, never
+   * re-captured). Failures restore the fresh turns for the next flush.
+   */
+  private async flushSegment(segment: TranscriptSegment): Promise<void> {
     try {
-      await this.ingest(msg);
+      if (this.store.rememberTranscript) {
+        const outcome = await this.store.rememberTranscript(segment);
+        if (outcome.status === "needs_confirmation") {
+          this.log(
+            `segment capture held for owner confirmation (#${segment.channelId}, ${segment.fresh.length} turns)`
+          );
+        } else {
+          this.log(
+            `captured segment #${segment.channelId} (${segment.fresh.length} fresh turns, reason=${segment.reason})`
+          );
+        }
+        return;
+      }
+      for (const turn of segment.fresh) {
+        for (const memory of extractMemories(channelMessageOf(segment.channelId, turn))) {
+          const outcome = await this.store.remember(memory);
+          if (outcome.status === "needs_confirmation") {
+            this.log(`capture held for owner confirmation [${memory.kind}] ${memory.content}`);
+          } else {
+            this.log(`remembered [${memory.kind}] ${memory.content}`);
+          }
+        }
+      }
     } catch (err) {
-      // The capture failed, so un-mark the event: a relay redelivery is
-      // this message's only retry path and must not be swallowed by dedup.
-      this.seenEventIds.delete(event.id);
-      throw err;
+      this.window.restore(segment.channelId, segment.fresh);
+      this.log(
+        `segment capture failed #${segment.channelId} (${segment.fresh.length} turns retained for retry): ${err}`
+      );
     }
   }
 
   /**
    * Run a command/mention handler; if the silo errors, tell the channel
-   * instead of failing silently (passive ingest errors only hit the log).
+   * instead of failing silently (passive capture errors only hit the log).
    *
    * Failed commands/mentions deliberately STAY deduped: the human got an
    * explicit error reply and their retry is a new event (new id), which is
    * the interactive retry path. Un-marking would let a relay redelivery
    * re-run the command later and post an out-of-context duplicate reply.
-   * Passive ingest is the opposite — no human in the loop — so only there
-   * does a failure un-mark the event to make redelivery a retry.
+   * Passive capture failures retry via the turn window (restore + next
+   * flush) rather than via redelivery.
    */
   private async answering(
     msg: ChannelMessage,
@@ -152,22 +221,6 @@ export class SiloMemoryAgent {
       } catch (replyErr) {
         // Relay down too — nothing left to do but record both failures.
         this.log(`failed to deliver error reply ${msg.event.id.slice(0, 8)}: ${replyErr}`);
-      }
-    }
-  }
-
-  private async ingest(msg: ChannelMessage): Promise<void> {
-    const memories = extractMemories(msg);
-    for (const memory of memories) {
-      const outcome = await this.store.remember(memory);
-      if (outcome.status === "needs_confirmation") {
-        // The capture was NOT applied — it would replace existing memories
-        // and only the silo owner may confirm that (from the dashboard).
-        this.log(
-          `capture held for owner confirmation [${memory.kind}] ${memory.content}`
-        );
-      } else {
-        this.log(`remembered [${memory.kind}] ${memory.content}`);
       }
     }
   }
@@ -246,20 +299,17 @@ export class SiloMemoryAgent {
     }
     // Questions addressed to the agent are requests for memory, not memory
     // — but a mention can also carry a statement worth keeping
-    // ("@silo we decided to ship Friday"). Distill the mention-stripped
-    // text unless it reads as a question.
+    // ("@silo we decided to ship Friday"). Push the mention-stripped text
+    // into the channel's turn window as salient, so it flushes now WITH the
+    // surrounding conversation as context. Capture failures are retried by
+    // the window (restore + next flush); the event stays marked seen so a
+    // redelivery can't answer the mention twice.
     if (!isQuestion(query)) {
-      try {
-        await this.ingest({ ...msg, content: query });
-      } catch (err) {
-        // The answer path already ran — a capture failure here must not
-        // send a confusing second (error) reply; it only hits the log. The
-        // event deliberately STAYS marked seen: un-marking (as the passive
-        // path does) would make a relay redelivery answer the mention a
-        // second time, and a duplicated answer is worse than a lost
-        // side-capture — !remember covers the explicit path.
-        this.log(`mention capture failed ${msg.event.id.slice(0, 8)}: ${err}`);
-      }
+      await this.window.push(
+        msg.channelId,
+        { ...turnOf(msg), content: query },
+        true
+      );
     }
     if (deliveryFailure) throw deliveryFailure; // answering() logs DeliveryError
   }
@@ -285,4 +335,25 @@ export class SiloMemoryAgent {
     }
     this.log(`replied in ${to.channelId}: ${content.split("\n")[0]}`);
   }
+}
+
+function turnOf(msg: ChannelMessage): Turn {
+  return {
+    authorPubkey: msg.authorPubkey,
+    content: msg.content,
+    createdAt: msg.createdAt,
+    eventId: msg.event.id,
+  };
+}
+
+/** Minimal ChannelMessage for the per-turn extraction fallback. */
+function channelMessageOf(channelId: string, turn: Turn): ChannelMessage {
+  return {
+    event: { id: turn.eventId } as NostrEvent,
+    channelId,
+    authorPubkey: turn.authorPubkey,
+    content: turn.content,
+    createdAt: turn.createdAt,
+    mentionedPubkeys: [],
+  };
 }
