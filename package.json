@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
+    "connect": "tsx src/connect.ts",
     "demo": "tsx demo/demo.ts",
     "test": "tsx --test test/*.test.ts",
     "lint": "tsc --noEmit"

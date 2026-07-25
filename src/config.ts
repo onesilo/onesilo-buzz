@@ -7,11 +7,19 @@ export interface Config {
   channelIds: string[];
   silo:
     | { mode: "local"; path: string }
-    | { mode: "backend"; baseUrl: string; siloId: string; apiToken: string };
+    | {
+        mode: "mcp";
+        /** Control-plane origin, e.g. https://api.onesilo.com */
+        serverUrl: string;
+        /** Cloud silo to use; "default" = the connection's auto-provisioned silo. */
+        siloId: string;
+        tokenPath: string;
+        callbackPort: number;
+      };
 }
 
 export function loadConfig(env = process.env): Config {
-  const mode = env.SILO_MODE === "backend" ? "backend" : "local";
+  const mode = env.SILO_MODE === "local" ? "local" : "mcp";
   return {
     relayUrl: env.BUZZ_RELAY_URL ?? "ws://localhost:7777",
     agentHandle: env.AGENT_HANDLE ?? "silo",
@@ -21,19 +29,14 @@ export function loadConfig(env = process.env): Config {
       .map((s) => s.trim())
       .filter(Boolean),
     silo:
-      mode === "backend"
+      mode === "mcp"
         ? {
             mode,
-            baseUrl: required(env, "SILO_API_URL"),
-            siloId: required(env, "SILO_ID"),
-            apiToken: required(env, "SILO_API_TOKEN"),
+            serverUrl: env.SILO_SERVER_URL ?? "https://api.onesilo.com",
+            siloId: env.SILO_ID ?? "default",
+            tokenPath: env.SILO_TOKEN_PATH ?? ".silo/oauth.json",
+            callbackPort: Number(env.SILO_OAUTH_CALLBACK_PORT ?? 8765),
           }
         : { mode, path: env.SILO_LOCAL_PATH ?? ".silo/memories.json" },
   };
-}
-
-function required(env: NodeJS.ProcessEnv, key: string): string {
-  const value = env[key];
-  if (!value) throw new Error(`Missing required env var ${key} (SILO_MODE=backend)`);
-  return value;
 }

@@ -101,14 +101,14 @@ export class SiloMemoryAgent {
       }
       case "recall": {
         if (!arg) return this.reply(msg, "Usage: !recall <query>");
-        const results = await this.store.recall({
-          text: arg,
-          channelId: undefined, // silo-wide recall: memory crosses channels
-          limit: 5,
-        });
-        return this.reply(msg, formatRecall(arg, results, this.names));
+        return this.reply(msg, await this.answer(arg));
       }
       case "memories": {
+        // Prefer the silo's own overview (silo_get_context) when the store
+        // can compose one; fall back to a local recent-memories list.
+        if (this.store.overview) {
+          return this.reply(msg, await this.store.overview());
+        }
         const recent = await this.store.recent(msg.channelId, 10);
         return this.reply(msg, formatRecent(recent));
       }
@@ -134,10 +134,22 @@ export class SiloMemoryAgent {
         "Hi! I give this workspace memory via Silo. Try `!recall <query>`, `!remember <text>`, or `!memories`."
       );
     }
-    const results = await this.store.recall({ text: query, limit: 5 });
-    await this.reply(msg, formatRecall(query, results, this.names));
+    await this.reply(msg, await this.answer(query));
     // A question addressed to us is often worth remembering too.
     await this.ingest(msg);
+  }
+
+  /**
+   * Answer a question from memory. When the store can compose a grounded
+   * answer itself (silo_ask), relay it verbatim — the silo's voice is the
+   * product. Otherwise recall raw memories and format locally.
+   */
+  private async answer(query: string): Promise<string> {
+    if (this.store.ask) {
+      return this.store.ask(query);
+    }
+    const results = await this.store.recall({ text: query, limit: 5 });
+    return formatRecall(query, results, this.names);
   }
 
   private async reply(to: ChannelMessage, content: string): Promise<void> {

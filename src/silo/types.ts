@@ -61,4 +61,13 @@ export interface MemoryStore {
   forget(memoryId: string): Promise<boolean>;
   /** Most recent memories, newest first. */
   recent(channelId: string | undefined, limit: number): Promise<Memory[]>;
+  /**
+   * Silo-composed answer to a question (the backend's `silo_ask`): a
+   * finished, grounded reply meant to be relayed verbatim. Stores that
+   * can't compose answers omit this and the agent falls back to
+   * recall + local formatting.
+   */
+  ask?(question: string): Promise<string>;
+  /** Silo-composed overview of what's stored (used by !memories). */
+  overview?(): Promise<string>;
 }

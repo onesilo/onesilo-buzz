@@ -1,7 +1,7 @@
 /**
  * Standalone Silo store: JSON persistence + lexical ranking. Exists so the
  * prototype runs end-to-end with zero infrastructure. The real deployment
- * swaps in `SiloBackendStore` (same interface) — see client.ts.
+ * swaps in `McpSiloStore` (same interface) — see mcp-store.ts.
  *
  * Ranking is deliberately simple: token-overlap TF scoring with a recency
  * decay and a salience boost. Good enough to demo recall quality on a
