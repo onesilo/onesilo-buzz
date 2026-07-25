@@ -170,9 +170,20 @@ export class McpSiloStore implements MemoryStore {
   async forget(memoryId: string, channelId?: string): Promise<boolean> {
     const primary = this.router.resolve(channelId);
     const buckets = [primary, ...this.router.buckets.filter((b) => b !== primary)];
+    let lastError: Error | undefined;
     for (const siloId of buckets) {
-      if (await this.forgetIn(siloId, memoryId)) return true;
+      try {
+        if (await this.forgetIn(siloId, memoryId)) return true;
+      } catch (err) {
+        // One bucket erroring must not stop the sweep — the id may live in
+        // a later bucket.
+        lastError = err instanceof Error ? err : new Error(String(err));
+        this.log(`silo_forget error in bucket ${siloId} (continuing): ${lastError.message}`);
+      }
     }
+    // Nothing deleted: if a bucket errored we can't honestly say "no such
+    // memory" — surface the failure so the agent apologizes instead.
+    if (lastError) throw lastError;
     return false;
   }
 

@@ -115,6 +115,23 @@ test("forget falls back across buckets when the command channel's bucket misses"
   );
 });
 
+test("forget sweeps past a bucket error and surfaces it only if nothing deleted", async () => {
+  const router = SiloBucketRouter.fromEnv("default", "eng=silo-eng");
+  const { client } = fakeMcp((_name, args) =>
+    args.silo_id === "default"
+      ? { payload: "bucket down", isError: true }
+      : { payload: { deleted: ["m1"] }, isError: false }
+  );
+  // Errors in the first bucket, succeeds in the second → true.
+  assert.equal(await new McpSiloStore(client, router).forget("m1", "random"), true);
+
+  const { client: allFail } = fakeMcp(() => ({ payload: "down", isError: true }));
+  await assert.rejects(
+    () => new McpSiloStore(allFail, router).forget("m1", "random"),
+    /silo_forget failed/
+  );
+});
+
 test("init logs scope and warns on buckets outside the connection's grants", async () => {
   const logs: string[] = [];
   const router = SiloBucketRouter.fromEnv("default", "eng=silo-known,ops=silo-unknown");

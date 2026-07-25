@@ -40,7 +40,10 @@ const FACT_MIN_TOKENS = 7; // the "fact" pattern is broad; demand more substance
 const WH_INTERROGATIVE = /^(what|who|whom|whose|when|where|why|how|which)\b/i;
 const AUX_INTERROGATIVE =
   /^(can|could|would|will|shall|should|do|does|did|is|are|was|were|has|have|had)\s+(you|we|i|anyone|someone|somebody|they|he|she|it)\b/i;
-const RECALL_REQUEST = /\b(remind me|do you know|does anyone know|any idea)\b/i;
+// Anchored to the start: a message that OPENS with a recall phrasing is a
+// query; the same phrase mid-sentence ("we decided X — remind me later")
+// must not suppress distillation of the statement around it.
+const RECALL_REQUEST = /^(please\s+)?(remind me|do you know|does anyone know|any idea)\b/i;
 
 /** Questions are requests for memory, not memory — don't distill them. */
 export function isQuestion(text: string): boolean {

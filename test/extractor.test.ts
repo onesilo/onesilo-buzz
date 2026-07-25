@@ -77,6 +77,14 @@ test("embedded recall requests are not distilled as memory", () => {
   assert.equal(out.length, 0);
 });
 
+test("a mid-sentence recall phrase does not suppress a real statement", () => {
+  const out = extractMemories(
+    msg("we decided to ship the payments migration Friday — remind me to update the runbook")
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.kind, "decision");
+});
+
 test("explicit memories store verbatim with max salience", () => {
   const m = explicitMemory(msg("!remember rollback = flag payments-v1"), "rollback = flag payments-v1");
   assert.equal(m.kind, "explicit");

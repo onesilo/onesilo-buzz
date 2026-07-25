@@ -125,6 +125,7 @@ export class WebSocketRelay implements BuzzRelay {
   }
 
   private onMessage(raw: string): void {
+    if (this.closed) return; // no dispatch after shutdown was requested
     let msg: unknown[];
     try {
       msg = JSON.parse(raw);
