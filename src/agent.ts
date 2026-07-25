@@ -37,9 +37,15 @@ export interface AgentOptions {
 
 const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/;
 
+const SEEN_EVENTS_MAX = 2000;
+
 export class SiloMemoryAgent {
   private readonly names: Map<string, string>;
   private readonly log: (line: string) => void;
+  /** Serializes event handling so replies can't outrun earlier captures. */
+  private queue: Promise<void> = Promise.resolve();
+  /** Bounded dedup of relay redeliveries by event id. */
+  private readonly seenEventIds = new Set<string>();
 
   constructor(
     private readonly relay: BuzzRelay,
@@ -54,8 +60,13 @@ export class SiloMemoryAgent {
   async start(): Promise<void> {
     await this.relay.connect();
     this.relay.subscribeChannels(this.options.channelIds ?? [], (event) => {
-      void this.handleEvent(event).catch((err) =>
-        this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
+      // Events are processed strictly in arrival order: a !recall must see
+      // the memories of every message delivered before it, and a redelivered
+      // event must not be captured twice.
+      this.queue = this.queue.then(() =>
+        this.handleEvent(event).catch((err) =>
+          this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
+        )
       );
     });
     this.log(`silo-memory agent online as ${this.identity.pubkey.slice(0, 12)}… (@${this.identity.handle})`);
@@ -63,21 +74,48 @@ export class SiloMemoryAgent {
 
   async handleEvent(event: NostrEvent): Promise<void> {
     if (event.pubkey === this.identity.pubkey) return; // never eat our own replies
+    if (this.seenEventIds.has(event.id)) return;
+    this.seenEventIds.add(event.id);
+    if (this.seenEventIds.size > SEEN_EVENTS_MAX) {
+      const oldest = this.seenEventIds.values().next().value;
+      if (oldest) this.seenEventIds.delete(oldest);
+    }
     const msg = parseChannelMessage(event);
     if (!msg) return;
 
     const command = msg.content.trim().match(COMMAND);
     if (command) {
-      await this.handleCommand(msg, command[1]!, (command[2] ?? "").trim());
+      await this.answering(msg, () =>
+        this.handleCommand(msg, command[1]!, (command[2] ?? "").trim())
+      );
       return;
     }
 
     if (isAddressedTo(msg, this.identity.pubkey, this.identity.handle)) {
-      await this.handleMention(msg);
+      await this.answering(msg, () => this.handleMention(msg));
       return;
     }
 
     await this.ingest(msg);
+  }
+
+  /**
+   * Run a command/mention handler; if the silo errors, tell the channel
+   * instead of failing silently (passive ingest errors only hit the log).
+   */
+  private async answering(
+    msg: ChannelMessage,
+    handler: () => Promise<void>
+  ): Promise<void> {
+    try {
+      await handler();
+    } catch (err) {
+      this.log(`error answering ${msg.event.id.slice(0, 8)}: ${err}`);
+      await this.reply(
+        msg,
+        "Sorry — I hit an error talking to the silo. Please try again in a moment."
+      );
+    }
   }
 
   private async ingest(msg: ChannelMessage): Promise<void> {
@@ -151,8 +189,9 @@ export class SiloMemoryAgent {
       );
     }
     await this.reply(msg, await this.answer(query));
-    // A question addressed to us is often worth remembering too.
-    await this.ingest(msg);
+    // Deliberately NOT ingested: questions addressed to the agent are
+    // requests for memory, not memory — capturing them as decisions/facts
+    // would pollute the silo.
   }
 
   /**

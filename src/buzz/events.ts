@@ -59,12 +59,18 @@ function mentionPattern(handle: string, flags = "i"): RegExp {
   return new RegExp(`@${escaped}(?![\\w-])`, flags);
 }
 
+/**
+ * A message is addressed to the agent only when the text actually mentions
+ * its @handle. A bare `p` tag is a notification (replies and announcements
+ * routinely tag people without speaking to them) — treating it as a direct
+ * question would break the agent's listen-unless-spoken-to contract, so
+ * `pubkey` is intentionally not consulted for addressing.
+ */
 export function isAddressedTo(
   msg: ChannelMessage,
-  pubkey: string,
+  _pubkey: string,
   handle: string
 ): boolean {
-  if (msg.mentionedPubkeys.includes(pubkey)) return true;
   return mentionPattern(handle).test(msg.content);
 }
 

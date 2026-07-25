@@ -33,7 +33,8 @@ export class WebSocketRelay implements BuzzRelay {
   private ws?: WebSocket;
   private subSeq = 0;
   private handlers = new Map<string, EventHandler>();
-  private pendingSubs: string[] = [];
+  /** Filters by subscription id, replayed after NIP-42 auth completes. */
+  private subscriptions = new Map<string, Record<string, unknown>>();
 
   constructor(
     private readonly url: string,
@@ -78,6 +79,12 @@ export class WebSocketRelay implements BuzzRelay {
         this.identity.secretKey
       );
       this.ws?.send(JSON.stringify(["AUTH", auth]));
+      // A relay that enforces auth-before-subscribe drops REQs sent before
+      // the challenge completed. Replaying every subscription is safe: a
+      // REQ with an existing sub id simply replaces that subscription.
+      for (const [subId, filter] of this.subscriptions) {
+        this.ws?.send(JSON.stringify(["REQ", subId, filter]));
+      }
     }
   }
 
@@ -91,6 +98,7 @@ export class WebSocketRelay implements BuzzRelay {
       since: Math.floor(Date.now() / 1000),
     };
     if (channelIds.length > 0) filter[`#${CHANNEL_TAG}`] = channelIds;
+    this.subscriptions.set(subId, filter);
     this.ws.send(JSON.stringify(["REQ", subId, filter]));
   }
 

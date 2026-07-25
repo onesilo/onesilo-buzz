@@ -8,6 +8,7 @@ import { KIND_CHANNEL_MESSAGE, CHANNEL_TAG } from "../src/buzz/events.js";
 import { loadIdentity } from "../src/buzz/identity.js";
 import { LocalSiloStore } from "../src/silo/local.js";
 import { SiloMemoryAgent } from "../src/agent.js";
+import type { MemoryStore } from "../src/silo/types.js";
 
 async function setup() {
   const identity = loadIdentity("silo");
@@ -77,6 +78,63 @@ test("!remember stores verbatim and !forget removes it", async () => {
   await settle();
   assert.equal(store.size, 0);
   assert.match(relay.published.at(-1)!.content, /Forgotten/);
+});
+
+test("a p tag alone does not trigger a reply (listen unless spoken to)", async () => {
+  const { identity, relay, say } = await setup();
+  say("heads up: deploy happening later for the payments team", "eng", [["p", identity.pubkey]]);
+  await settle();
+  assert.equal(relay.published.length, 0);
+});
+
+test("redelivered events are deduplicated by id", async () => {
+  const { relay, store, say } = await setup();
+  const userSk = generateSecretKey();
+  const event = finalizeEvent(
+    {
+      kind: KIND_CHANNEL_MESSAGE,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [[CHANNEL_TAG, "eng"]],
+      content: "we decided to ship the payments migration on Friday",
+    },
+    userSk
+  );
+  relay.deliver(event);
+  relay.deliver(event); // relay redelivery
+  await settle();
+  assert.equal(store.size, 1);
+  void say; // setup() helper unused here on purpose
+});
+
+test("silo errors on commands produce an apologetic reply", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const failing: MemoryStore = {
+    remember: async () => {
+      throw new Error("mcp down");
+    },
+    recall: async () => {
+      throw new Error("mcp down");
+    },
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, failing, identity);
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!recall anything",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+  assert.equal(relay.published.length, 1);
+  assert.match(relay.published[0]!.content, /hit an error/);
 });
 
 test("mention matching does not false-positive on longer handles", async () => {

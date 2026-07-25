@@ -57,10 +57,11 @@ export class McpSiloStore implements MemoryStore {
       `[buzz kind=${memory.kind} salience=${memory.salience} ` +
       `channel=${memory.source.channelId} author=${memory.source.authorPubkey} ` +
       `event=${memory.source.eventId} ts=${memory.source.createdAt}]`;
-    const { payload } = await this.mcp.callTool("silo_remember", {
+    const { payload, isError } = await this.mcp.callTool("silo_remember", {
       silo_id: this.siloId,
       content,
     });
+    if (isError) throw new Error(`silo_remember failed: ${describe(payload)}`);
     const status = (payload as { status?: string })?.status;
     if (status === "requires_confirmation") {
       this.log(
@@ -73,12 +74,16 @@ export class McpSiloStore implements MemoryStore {
 
   async recall(query: MemoryQuery): Promise<ScoredMemory[]> {
     const limit = query.limit ?? 5;
-    const { payload } = await this.mcp.callTool("silo_recall", {
+    const { payload, isError } = await this.mcp.callTool("silo_recall", {
       silo_id: this.siloId,
       query: query.text,
-      // over-fetch when channel-filtering, since we filter client-side
-      max_results: Math.min(25, query.channelId ? limit * 3 : limit),
+      // Channel filtering is client-side and best-effort: fetch the tool's
+      // maximum, but if every top semantic match lives in other channels
+      // the requested channel can still come back empty. A server-side
+      // channel filter on silo_recall is the real fix (see README roadmap).
+      max_results: query.channelId ? 25 : Math.min(25, limit),
     });
+    if (isError) throw new Error(`silo_recall failed: ${describe(payload)}`);
     const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
@@ -93,19 +98,21 @@ export class McpSiloStore implements MemoryStore {
   }
 
   async ask(question: string): Promise<string> {
-    const { payload } = await this.mcp.callTool("silo_ask", {
+    const { payload, isError } = await this.mcp.callTool("silo_ask", {
       silo_id: this.siloId,
       question,
     });
+    if (isError) throw new Error(`silo_ask failed: ${describe(payload)}`);
     if (typeof payload === "string") return payload;
     const answer = (payload as { answer?: string; response?: string }) ?? {};
     return answer.answer ?? answer.response ?? JSON.stringify(payload);
   }
 
   async overview(): Promise<string> {
-    const { payload } = await this.mcp.callTool("silo_get_context", {
+    const { payload, isError } = await this.mcp.callTool("silo_get_context", {
       silo_id: this.siloId,
     });
+    if (isError) throw new Error(`silo_get_context failed: ${describe(payload)}`);
     return typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   }
 
@@ -123,10 +130,11 @@ export class McpSiloStore implements MemoryStore {
 
   /** Deterministic scan; used only when overview() isn't the better fit. */
   async recent(channelId: string | undefined, limit: number): Promise<Memory[]> {
-    const { payload } = await this.mcp.callTool("silo_search_memories", {
+    const { payload, isError } = await this.mcp.callTool("silo_search_memories", {
       silo_id: this.siloId,
       query: channelId ? `channel=${channelId}` : "[buzz",
     });
+    if (isError) throw new Error(`silo_search_memories failed: ${describe(payload)}`);
     const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
@@ -134,14 +142,21 @@ export class McpSiloStore implements MemoryStore {
   }
 }
 
+function describe(payload: unknown): string {
+  return typeof payload === "string" ? payload : JSON.stringify(payload);
+}
+
 /**
  * Map a backend memory to the local model. Buzz provenance is recovered from
  * the inline trailer when present (round-trip of remember()'s format).
+ * Anchored to the END of the content: remember() always appends the real
+ * trailer last, so a forged `[buzz …]` earlier in user-authored text can't
+ * spoof channel/author/event provenance.
  */
 function toMemory(hit: RecallHit): Memory {
   const content = hit.content ?? "";
   const trailer = content.match(
-    /\[buzz kind=(\S+) salience=([\d.]+) channel=(\S+) author=(\S+) event=(\S+) ts=(\d+)\]/
+    /\[buzz kind=(\S+) salience=([\d.]+) channel=(\S+) author=(\S+) event=(\S+) ts=(\d+)\]\s*$/
   );
   const body = trailer ? content.slice(0, trailer.index).trim() : content;
   const kind = trailer?.[1] ?? hit.type ?? "fact";
