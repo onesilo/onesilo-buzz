@@ -128,6 +128,35 @@ test("bootstraps via refresh when only a refresh token is stored", async () => {
   assert.equal(oauth.refreshes, 1);
 });
 
+test("a failed initialize discards the partially-issued session id", async () => {
+  let initializes = 0;
+  const calls = stubFetch((req) => {
+    if (req.body.method === "initialize") {
+      initializes += 1;
+      if (initializes === 1) {
+        // Server issues a session id but the RPC itself errors.
+        return jsonResponse(
+          { jsonrpc: "2.0", id: req.body.id, error: { message: "overloaded" } },
+          { "mcp-session-id": "half-open" }
+        );
+      }
+      return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: {} });
+    }
+    if (req.body.method === "notifications/initialized") {
+      return new Response(null, { status: 202 });
+    }
+    return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: { structuredContent: {} } });
+  });
+  const client = new McpClient(URL_, fakeOauth(["tok"]));
+  await assert.rejects(() => client.callTool("silo_recall", { silo_id: "default", query: "x" }));
+  await client.callTool("silo_recall", { silo_id: "default", query: "x" }); // recovers
+  const secondInit = calls.find(
+    (c, i) => c.body.method === "initialize" && i > 0
+  );
+  assert.ok(secondInit);
+  assert.equal(secondInit!.headers["mcp-session-id"], undefined); // stale id not reused
+});
+
 test("an empty initialize response does not mark the session ready", async () => {
   stubFetch(() => new Response(null, { status: 202 }));
   const client = new McpClient(URL_, fakeOauth(["tok"]));

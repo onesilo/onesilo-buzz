@@ -115,12 +115,18 @@ export class McpSiloStore implements MemoryStore {
       content,
     });
     if (isError) throw new Error(`silo_remember failed: ${describe(payload)}`);
-    const status = (payload as { status?: string })?.status;
-    if (status === "requires_confirmation") {
+    const body = (payload ?? {}) as { status?: string; id?: string; memory_id?: string };
+    if (body.status === "requires_confirmation") {
       this.log(
         `silo_remember requires confirmation (would replace existing memories) — skipped: ${memory.content}`
       );
       return { status: "needs_confirmation" };
+    }
+    // Some capture paths apply synchronously and return the stored id —
+    // pass it through so !remember can confirm with a real, forgettable id.
+    const storedId = body.id ?? body.memory_id;
+    if (body.status === "stored" && typeof storedId === "string" && storedId) {
+      return { status: "stored", id: storedId };
     }
     return { status: "queued" };
   }

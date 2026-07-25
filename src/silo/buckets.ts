@@ -38,7 +38,11 @@ export class SiloBucketRouter {
   static fromEnv(defaultSiloId: string, spec: string | undefined): SiloBucketRouter {
     const map = new Map<string, string>();
     for (const entry of (spec ?? "").split(",")) {
-      const [channel, silo] = entry.split("=").map((s) => s.trim());
+      // Split on the FIRST "=" only, so a silo id containing "=" survives.
+      const idx = entry.indexOf("=");
+      if (idx <= 0) continue;
+      const channel = entry.slice(0, idx).trim();
+      const silo = entry.slice(idx + 1).trim();
       if (channel && silo) map.set(channel, silo);
     }
     return new SiloBucketRouter(defaultSiloId, map);

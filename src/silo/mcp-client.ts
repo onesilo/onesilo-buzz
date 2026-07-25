@@ -66,23 +66,31 @@ export class McpClient {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    const { rpc } = await this.post({
-      jsonrpc: "2.0",
-      id: ++this.rpcId,
-      method: "initialize",
-      params: {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: this.clientInfo,
-      },
-    });
-    if (rpc === undefined) {
-      throw new Error("MCP initialize returned an empty response");
+    try {
+      const { rpc } = await this.post({
+        jsonrpc: "2.0",
+        id: ++this.rpcId,
+        method: "initialize",
+        params: {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: this.clientInfo,
+        },
+      });
+      if (rpc === undefined) {
+        throw new Error("MCP initialize returned an empty response");
+      }
+      const error = (rpc as { error?: { message?: string } })?.error;
+      if (error) throw new Error(`MCP initialize failed: ${error.message}`);
+      await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
+      this.initialized = true;
+    } catch (err) {
+      // A partial handshake must not leave a half-open session behind —
+      // the server may already have issued an Mcp-Session-Id.
+      this.sessionId = undefined;
+      this.initialized = false;
+      throw err;
     }
-    const error = (rpc as { error?: { message?: string } })?.error;
-    if (error) throw new Error(`MCP initialize failed: ${error.message}`);
-    await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
-    this.initialized = true;
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {

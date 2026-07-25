@@ -45,6 +45,21 @@ test("remember calls silo_remember with a full-fidelity provenance trailer", asy
   );
 });
 
+test("remember passes a synchronous stored id through", async () => {
+  const { client } = fakeMcp(() => ({
+    payload: { status: "stored", id: "silo-mem-42" },
+    isError: false,
+  }));
+  const outcome = await new McpSiloStore(client).remember(memory);
+  assert.deepEqual(outcome, { status: "stored", id: "silo-mem-42" });
+});
+
+test("channel map values containing '=' survive parsing", () => {
+  const router = SiloBucketRouter.fromEnv("default", "eng=abc=def, support=plain");
+  assert.equal(router.resolve("eng"), "abc=def");
+  assert.equal(router.resolve("support"), "plain");
+});
+
 test("remember reports requires_confirmation without confirming", async () => {
   const logs: string[] = [];
   const { client, calls } = fakeMcp(() => ({

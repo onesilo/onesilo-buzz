@@ -58,7 +58,8 @@ export class WebSocketRelay implements BuzzRelay {
 
   constructor(
     private readonly url: string,
-    private readonly identity: AgentIdentity
+    private readonly identity: AgentIdentity,
+    private readonly log: (line: string) => void = () => {}
   ) {}
 
   connect(): Promise<void> {
@@ -137,6 +138,16 @@ export class WebSocketRelay implements BuzzRelay {
       const [subId, event] = rest as [string, NostrEvent];
       if (!verifyEvent(event)) return; // never trust unsigned/forged input
       this.handlers.get(subId)?.(event);
+    } else if (type === "OK") {
+      // NIP-01 write acknowledgement. publish() resolves on socket write
+      // (see its doc); a rejection surfaces here for the operator. Gating
+      // publish() on OK (with timeouts for relays that omit it) is roadmap.
+      const [eventId, accepted, reason] = rest as [string, boolean, string?];
+      if (!accepted) {
+        this.log(
+          `relay rejected event ${String(eventId).slice(0, 8)}: ${reason ?? "no reason given"}`
+        );
+      }
     } else if (type === "AUTH") {
       // NIP-42: relay challenges us; sign kind 22242 with our agent key.
       const [challenge] = rest as [string];
@@ -188,6 +199,12 @@ export class WebSocketRelay implements BuzzRelay {
     this.ws.send(JSON.stringify(["REQ", subId, filter]));
   }
 
+  /**
+   * Resolution means "written to an open socket (or queued and flushed)".
+   * Relay-side acceptance is a separate NIP-01 OK frame: rejections are
+   * logged in onMessage rather than failing this promise, because relays
+   * may ack late or not at all — full OK-gated delivery is roadmap.
+   */
   publish(template: EventTemplate): Promise<NostrEvent> {
     if (this.closed) return Promise.reject(new Error("relay closed"));
     const event = finalizeEvent(template, this.identity.secretKey);

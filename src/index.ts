@@ -52,7 +52,7 @@ if (config.silo.mode === "mcp") {
   store = new LocalSiloStore(config.silo.path);
 }
 
-const relay = new WebSocketRelay(config.relayUrl, identity);
+const relay = new WebSocketRelay(config.relayUrl, identity, log);
 const agent = new SiloMemoryAgent(relay, store, identity, {
   channelIds: config.channelIds,
   log,
