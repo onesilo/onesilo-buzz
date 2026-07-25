@@ -59,10 +59,18 @@ export class WebSocketRelay implements BuzzRelay {
    */
   private open(onOpen?: () => void, onFail?: (err: Error) => void): void {
     if (this.closed) return;
+    // Drop any prior socket first: a slow, still-connecting one must not
+    // come up later and replay subscriptions/outbox on stale state.
+    const prior = this.ws;
+    if (prior) {
+      prior.removeAllListeners();
+      prior.terminate();
+    }
     const ws = new WebSocket(this.url);
     this.ws = ws;
     let opened = false;
     ws.on("open", () => {
+      if (this.ws !== ws) return; // superseded by a newer socket
       opened = true;
       this.reconnectDelayMs = 1000;
       for (const [subId, filter] of this.subscriptions) {
@@ -80,7 +88,7 @@ export class WebSocketRelay implements BuzzRelay {
       if (!opened) onFail?.(err as Error);
     });
     ws.on("close", () => {
-      if (this.closed) return;
+      if (this.closed || this.ws !== ws) return;
       if (!opened && onFail) return; // initial connect failed; caller was rejected
       const delay = this.reconnectDelayMs;
       this.reconnectDelayMs = Math.min(delay * 2, 30_000);

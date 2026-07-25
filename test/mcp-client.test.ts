@@ -5,16 +5,27 @@ import type { SiloOAuthClient } from "../src/silo/oauth.js";
 
 const URL_ = "https://api.onesilo.test/mcp";
 
-function fakeOauth(tokens: string[]): SiloOAuthClient & { refreshes: number } {
-  let i = 0;
-  return {
+function fakeOauth(
+  tokens: string[],
+  startWithoutAccessToken = false
+): SiloOAuthClient & { refreshes: number } {
+  let i = startWithoutAccessToken ? -1 : 0;
+  const o = {
     refreshes: 0,
-    accessToken: () => tokens[Math.min(i, tokens.length - 1)]!,
-    refresh: async function (this: { refreshes: number }) {
-      this.refreshes += 1;
+    accessToken: () => {
+      if (i < 0) throw new Error("no access token");
+      return tokens[Math.min(i, tokens.length - 1)]!;
+    },
+    refresh: async () => {
+      o.refreshes += 1;
       i += 1;
     },
-  } as unknown as SiloOAuthClient & { refreshes: number };
+    ensureAccessToken: async () => {
+      if (i < 0) await o.refresh();
+      return o.accessToken();
+    },
+  };
+  return o as unknown as SiloOAuthClient & { refreshes: number };
 }
 
 interface Recorded {
@@ -99,6 +110,22 @@ test("401 triggers one refresh and a retry with the new token", async () => {
   await client.callTool("silo_recall", { silo_id: "default", query: "x" });
   assert.equal(oauth.refreshes, 1);
   assert.ok(calls.some((c) => c.headers["authorization"] === "Bearer fresh"));
+});
+
+test("bootstraps via refresh when only a refresh token is stored", async () => {
+  const oauth = fakeOauth(["fresh"], true); // no access token until refresh
+  stubFetch((req) => {
+    if (req.body.method === "initialize") {
+      return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: {} });
+    }
+    if (req.body.method === "notifications/initialized") {
+      return new Response(null, { status: 202 });
+    }
+    return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: { structuredContent: {} } });
+  });
+  const client = new McpClient(URL_, oauth);
+  await client.callTool("silo_recall", { silo_id: "default", query: "x" });
+  assert.equal(oauth.refreshes, 1);
 });
 
 test("an empty tools/call response is an error, not a silent success", async () => {

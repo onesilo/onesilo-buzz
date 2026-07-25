@@ -200,6 +200,18 @@ export class SiloOAuthClient {
     return token;
   }
 
+  /**
+   * Bearer token for a request, refreshing first when only a refresh token
+   * is stored — a paired agent must be able to bootstrap without waiting
+   * for a 401 it can never send.
+   */
+  async ensureAccessToken(): Promise<string> {
+    if (!this.creds?.access_token && this.creds?.refresh_token) {
+      await this.refresh();
+    }
+    return this.accessToken();
+  }
+
   private refreshing?: Promise<void>;
 
   /**

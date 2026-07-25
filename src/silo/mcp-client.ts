@@ -33,7 +33,7 @@ export class McpClient {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
-      Authorization: `Bearer ${this.oauth.accessToken()}`,
+      Authorization: `Bearer ${await this.oauth.ensureAccessToken()}`,
       "MCP-Protocol-Version": PROTOCOL_VERSION,
     };
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
