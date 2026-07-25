@@ -154,7 +154,17 @@ export class SiloOAuthClient {
         server.close();
         resolve(code);
       });
-      server.listen(this.config.callbackPort ?? 8765, "127.0.0.1");
+      const port = this.config.callbackPort ?? 8765;
+      server.on("error", (err) => {
+        reject(
+          new Error(
+            `OAuth callback server failed to listen on 127.0.0.1:${port} ` +
+              `(${(err as NodeJS.ErrnoException).code ?? err.message}) — ` +
+              `is the port in use? Set SILO_OAUTH_CALLBACK_PORT to change it.`
+          )
+        );
+      });
+      server.listen(port, "127.0.0.1");
     });
   }
 

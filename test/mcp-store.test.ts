@@ -110,6 +110,21 @@ test("ask relays the silo-composed answer", async () => {
   assert.equal(answer, "The team decided to ship on Friday.");
 });
 
+test("recent filters cross-channel matches out of the substring scan", async () => {
+  const { client } = fakeMcp(() => ({
+    payload: {
+      memories: [
+        { id: "m1", content: trailered("eng", "eng memory") },
+        { id: "m2", content: trailered("support", "support memory") },
+      ],
+    },
+    isError: false,
+  }));
+  const recent = await new McpSiloStore(client).recent("eng", 10);
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0]!.source.channelId, "eng");
+});
+
 test("tool errors surface as thrown errors, not fake success", async () => {
   const { client } = fakeMcp(() => ({ payload: "boom", isError: true }));
   const store = new McpSiloStore(client);

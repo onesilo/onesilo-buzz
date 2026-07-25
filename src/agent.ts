@@ -44,7 +44,13 @@ export class SiloMemoryAgent {
   private readonly log: (line: string) => void;
   /** Serializes event handling so replies can't outrun earlier captures. */
   private queue: Promise<void> = Promise.resolve();
-  /** Bounded dedup of relay redeliveries by event id. */
+  /**
+   * Bounded FIFO dedup of relay redeliveries by event id. Eviction reopens
+   * a window for very old redeliveries, but memory ids are deterministic
+   * per event, so re-capture is idempotent for id-keyed stores, and the
+   * silo's ingestion/enrichment pipeline dedupes the rest; live-tail
+   * subscriptions make redeliveries older than the window rare.
+   */
   private readonly seenEventIds = new Set<string>();
 
   constructor(
@@ -121,8 +127,16 @@ export class SiloMemoryAgent {
   private async ingest(msg: ChannelMessage): Promise<void> {
     const memories = extractMemories(msg);
     for (const memory of memories) {
-      await this.store.remember(memory);
-      this.log(`remembered [${memory.kind}] ${memory.content}`);
+      const outcome = await this.store.remember(memory);
+      if (outcome.status === "needs_confirmation") {
+        // The capture was NOT applied — it would replace existing memories
+        // and only the silo owner may confirm that (from the dashboard).
+        this.log(
+          `capture held for owner confirmation [${memory.kind}] ${memory.content}`
+        );
+      } else {
+        this.log(`remembered [${memory.kind}] ${memory.content}`);
+      }
     }
   }
 

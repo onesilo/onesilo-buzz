@@ -33,8 +33,10 @@ export class WebSocketRelay implements BuzzRelay {
   private ws?: WebSocket;
   private subSeq = 0;
   private handlers = new Map<string, EventHandler>();
-  /** Filters by subscription id, replayed after NIP-42 auth completes. */
+  /** Filters by subscription id, replayed after reconnect / NIP-42 auth. */
   private subscriptions = new Map<string, Record<string, unknown>>();
+  private closed = false;
+  private reconnectDelayMs = 1000;
 
   constructor(
     private readonly url: string,
@@ -42,13 +44,38 @@ export class WebSocketRelay implements BuzzRelay {
   ) {}
 
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
-      this.ws = ws;
-      ws.on("open", () => resolve());
-      ws.on("error", (err) => reject(err));
-      ws.on("message", (data) => this.onMessage(String(data)));
+    return new Promise((resolve, reject) => this.open(resolve, reject));
+  }
+
+  /**
+   * Open (or re-open) the socket. The initial connect() rejects on failure;
+   * once connected, a dropped socket reconnects with capped exponential
+   * backoff and replays all subscriptions — overlap with already-seen
+   * events is handled by the agent's event-id dedup.
+   */
+  private open(onOpen?: () => void, onFail?: (err: Error) => void): void {
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+    let opened = false;
+    ws.on("open", () => {
+      opened = true;
+      this.reconnectDelayMs = 1000;
+      for (const [subId, filter] of this.subscriptions) {
+        ws.send(JSON.stringify(["REQ", subId, filter]));
+      }
+      onOpen?.();
     });
+    ws.on("error", (err) => {
+      if (!opened) onFail?.(err as Error);
+    });
+    ws.on("close", () => {
+      if (this.closed) return;
+      if (!opened && onFail) return; // initial connect failed; caller was rejected
+      const delay = this.reconnectDelayMs;
+      this.reconnectDelayMs = Math.min(delay * 2, 30_000);
+      setTimeout(() => this.open(), delay);
+    });
+    ws.on("message", (data) => this.onMessage(String(data)));
   }
 
   private onMessage(raw: string): void {
@@ -110,6 +137,7 @@ export class WebSocketRelay implements BuzzRelay {
   }
 
   close(): void {
+    this.closed = true;
     this.ws?.close();
   }
 }

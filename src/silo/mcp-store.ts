@@ -138,7 +138,12 @@ export class McpSiloStore implements MemoryStore {
     const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
-    return hits.slice(0, limit).map(toMemory);
+    return hits
+      .map(toMemory)
+      // The substring query pre-filters, but verify against the parsed
+      // trailer so cross-channel matches never leak into !memories.
+      .filter((m) => !channelId || m.source.channelId === channelId)
+      .slice(0, limit);
   }
 }
 

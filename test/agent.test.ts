@@ -106,6 +106,36 @@ test("redelivered events are deduplicated by id", async () => {
   void say; // setup() helper unused here on purpose
 });
 
+test("passive ingest logs held captures instead of claiming success", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  const holding: MemoryStore = {
+    remember: async () => ({ status: "needs_confirmation" }),
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, holding, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "we decided to ship the payments migration on Friday",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+  assert.match(logs.join("\n"), /held for owner confirmation/);
+  assert.doesNotMatch(logs.join("\n"), /^remembered/m);
+});
+
 test("silo errors on commands produce an apologetic reply", async () => {
   const identity = loadIdentity("silo");
   const relay = new FakeRelay(identity.secretKey);
