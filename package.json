@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Prototype: gives Buzz (buzz.xyz) long-term memory using Silo. A Buzz agent that ingests channel conversation into a Silo and answers with recalled context.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },

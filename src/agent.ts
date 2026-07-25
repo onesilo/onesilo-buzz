@@ -18,6 +18,7 @@ import type { BuzzRelay } from "./buzz/relay.js";
 import {
   parseChannelMessage,
   isAddressedTo,
+  stripMention,
   buildReply,
   type ChannelMessage,
 } from "./buzz/events.js";
@@ -95,21 +96,34 @@ export class SiloMemoryAgent {
     switch (command) {
       case "remember": {
         if (!arg) return this.reply(msg, "Usage: !remember <what to remember>");
-        const memory = explicitMemory(msg, arg);
-        await this.store.remember(memory);
-        return this.reply(msg, `Got it — I'll remember that. (id ${memory.id})`);
+        const outcome = await this.store.remember(explicitMemory(msg, arg));
+        switch (outcome.status) {
+          case "stored":
+            return this.reply(msg, `Got it — I'll remember that. (id ${outcome.id})`);
+          case "queued":
+            return this.reply(
+              msg,
+              "Got it — capturing that to the silo now; it'll be recallable shortly."
+            );
+          case "needs_confirmation":
+            return this.reply(
+              msg,
+              "That would update existing memories, so I didn't apply it — the silo owner can confirm the change from the Silo dashboard."
+            );
+        }
+        return;
       }
       case "recall": {
         if (!arg) return this.reply(msg, "Usage: !recall <query>");
         return this.reply(msg, await this.answer(arg));
       }
       case "memories": {
-        // Prefer the silo's own overview (silo_get_context) when the store
-        // can compose one; fall back to a local recent-memories list.
-        if (this.store.overview) {
+        // Channel-scoped recent list first; if the store has nothing for
+        // this channel but can compose a silo-wide overview, use that.
+        const recent = await this.store.recent(msg.channelId, 10);
+        if (recent.length === 0 && this.store.overview) {
           return this.reply(msg, await this.store.overview());
         }
-        const recent = await this.store.recent(msg.channelId, 10);
         return this.reply(msg, formatRecent(recent));
       }
       case "forget": {
@@ -124,10 +138,12 @@ export class SiloMemoryAgent {
   }
 
   private async handleMention(msg: ChannelMessage): Promise<void> {
-    // Strip the mention and treat the rest as a recall query.
-    const query = msg.content
-      .replace(new RegExp(`@${this.identity.handle}`, "ig"), "")
-      .trim();
+    // Strip the mention; if what's left is a !command, run it as one.
+    const query = stripMention(msg.content, this.identity.handle);
+    const command = query.match(COMMAND);
+    if (command) {
+      return this.handleCommand(msg, command[1]!, (command[2] ?? "").trim());
+    }
     if (!query) {
       return this.reply(
         msg,

@@ -21,7 +21,7 @@ interface Pattern {
 /** Ordered: first match wins, so put the most specific signals first. */
 const PATTERNS: Pattern[] = [
   { kind: "decision", regex: /\b(we (decided|agreed|are going with)|decision:|let'?s go with|we'?ll (use|ship|go with))\b/i, salience: 0.9 },
-  { kind: "action_item", regex: /\b(i('| wi)ll|action item:|todo:|@\w+ (will|to) )\b/i, salience: 0.7 },
+  { kind: "action_item", regex: /\b(i('| wi)ll|action item:|todo:)|@\w+\s+(will|to)\b/i, salience: 0.7 },
   { kind: "preference", regex: /\b(i (prefer|like|hate|always|never)|please (always|never|don'?t))\b/i, salience: 0.6 },
   { kind: "fact", regex: /\b(is|are|runs on|lives in|deadline|due|password is|url is|repo is|uses)\b/i, salience: 0.4 },
 ];

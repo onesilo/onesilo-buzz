@@ -14,6 +14,7 @@ import type {
   Memory,
   MemoryQuery,
   MemoryStore,
+  RememberOutcome,
   ScoredMemory,
 } from "./types.js";
 
@@ -47,9 +48,10 @@ export class LocalSiloStore implements MemoryStore {
     writeFileSync(this.path, JSON.stringify([...this.memories.values()], null, 2));
   }
 
-  async remember(memory: Memory): Promise<void> {
+  async remember(memory: Memory): Promise<RememberOutcome> {
     this.memories.set(memory.id, memory);
     this.persist();
+    return { status: "stored", id: memory.id };
   }
 
   async recall(query: MemoryQuery): Promise<ScoredMemory[]> {

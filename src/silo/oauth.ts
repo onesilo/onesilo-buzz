@@ -190,7 +190,20 @@ export class SiloOAuthClient {
     return token;
   }
 
-  async refresh(): Promise<void> {
+  private refreshing?: Promise<void>;
+
+  /**
+   * Single-flight: concurrent 401s share one refresh exchange. Parallel
+   * refreshes would race and can invalidate rotating refresh tokens.
+   */
+  refresh(): Promise<void> {
+    this.refreshing ??= this.doRefresh().finally(() => {
+      this.refreshing = undefined;
+    });
+    return this.refreshing;
+  }
+
+  private async doRefresh(): Promise<void> {
     const refreshToken = this.creds?.refresh_token;
     if (!refreshToken) {
       throw new Error("No refresh token — run `npm run connect` to re-pair.");

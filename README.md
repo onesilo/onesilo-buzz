@@ -1,146 +1,201 @@
-# buzz-silo-memory
+# Buzz × Silo — long-term memory for your Buzz workspace
 
-**Prototype: gives [Buzz](https://buzz.xyz/) long-term memory using Silo.**
+**A [Buzz](https://buzz.xyz/) agent that remembers, powered by [Silo](https://dashboard.onesilo.com/).**
 
-Buzz is Block's open-source workspace where humans and AI agents collaborate as
-first-class members — every message is a signed Nostr event, and a workspace
-relay is the single source of truth. Buzz has channels, threads, and agents,
-but conversation scrolls away like it does everywhere else.
+Buzz is an open-source workspace where humans and AI agents work together —
+every message is a cryptographically signed event, and agents join channels
+the same way coworkers do. But like every chat tool, conversation scrolls
+away: decisions get re-litigated, facts get re-asked, context evaporates.
 
-This prototype adds a **Silo Memory agent**: a Buzz member with its own
-cryptographic identity that sits in your channels, distills conversation into
-durable memories stored in a Silo, and recalls them on demand — across
-channels and across time.
+This project adds a **Silo Memory agent** to your workspace: a Buzz member
+with its own keypair that quietly distills your channels into durable,
+searchable memory — and answers with that memory when asked, across channels
+and across time.
 
 ```
-┌────────────┐   WebSocket    ┌──────────────────┐   MemoryStore    ┌──────────────────┐
-│ Buzz relay │ ─────────────▶ │ Silo Memory agent │ ───────────────▶ │ Silo              │
-│ (kind-9    │ ◀───────────── │  ingest → distill │ ◀─────────────── │  local JSON store │
-│  events)   │  signed replies│  recall → reply   │   ranked recall  │  or Silo backend  │
-└────────────┘                └──────────────────┘                  └──────────────────┘
+#eng     <alice>  after the debate yesterday: we decided to ship the payments
+                  migration on Friday, behind the flag
+#eng     <bob>    I'll rotate the staging API keys before the migration runs
+#eng     <alice>  !remember rollback plan: re-enable the legacy processor via
+                  LaunchDarkly flag payments-v1
+
+         ... the next day, in a different channel ...
+
+#support <bob>    @silo what did we decide about the payments migration?
+#support <silo>   Here's what I remember about "the payments migration":
+                  1. [Decision] we decided to ship the payments migration on
+                     Friday, behind the flag
+                     — alice, 2026-07-25, event de579e4d
+                  2. [Noted] rollback plan: re-enable the legacy processor via
+                     LaunchDarkly flag payments-v1
+                     — alice, 2026-07-25, event e5f1f682
+                  3. [Action item] I'll rotate the staging API keys before the
+                     migration runs
+                     — bob, 2026-07-25, event e02bad11
 ```
 
-## What it does
+Every recalled memory cites its provenance — author, date, and the signed
+Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
-- **Passive distillation** — listens to every channel it's added to and turns
-  messages into typed memories (`decision`, `fact`, `preference`,
-  `action_item`) with a salience score. Chatter is skipped. It never replies
-  unless spoken to.
-- **Explicit memory** — `!remember <text>` stores verbatim with max salience.
-- **Recall** — `!recall <query>`, or just `@silo <question>`. Answers are
-  ranked (match × salience × recency) and every memory cites its provenance:
-  author, date, and the Nostr event id it was distilled from — recall is
-  auditable because everything in Buzz is signed.
-- **Cross-channel memory** — a decision made in `#eng` is recallable from
-  `#support`. Housekeeping: `!memories` (recent, per-channel), `!forget <id>`.
+## What the agent does
 
-## Try it (zero infrastructure)
+- **Listens quietly.** In channels it's been added to, it distills messages
+  into typed memories — decisions, facts, preferences, action items — with a
+  salience score. Small talk is ignored. It never speaks unless spoken to.
+- **Remembers on demand.** `!remember <text>` stores something verbatim.
+- **Answers from memory.** `@silo <question>` or `!recall <query>` returns a
+  grounded answer composed from the silo's memory. A decision made in `#eng`
+  is recallable from `#support`.
+- **Stays accountable.** `!memories` lists what it knows; `!forget <id>`
+  deletes. When new information would *replace* existing memory, the agent
+  surfaces it instead of silently overwriting — rewriting memory is the
+  owner's call, not the agent's.
+
+| Command | What it does |
+| --- | --- |
+| `@silo <question>` | Answer from memory (grounded, provenance-cited) |
+| `!recall <query>` | Same as a mention, explicit form |
+| `!remember <text>` | Store verbatim, max salience |
+| `!memories` | What's stored (recent for the channel, or a silo overview) |
+| `!forget <id>` | Delete a memory by id |
+
+## Quick start
+
+### 1. Try the demo — no account, no infrastructure
 
 ```bash
+git clone https://github.com/onesilo/onesilo-buzz.git
+cd onesilo-buzz
 npm install
-npm run demo    # scripted two-day Buzz conversation through the full agent loop
-npm test        # unit + end-to-end tests (node:test, in-process fake relay)
+npm run demo    # scripted two-day conversation through the full agent loop
+npm test        # the test suite, including an end-to-end in-process relay
 ```
 
-## Run against a real workspace
+The demo runs entirely offline against a local memory store.
+
+### 2. Get a Silo
+
+The agent's real memory is a **Silo** — a private, managed memory store with
+semantic recall, entity/topic enrichment, and an owner dashboard. Your
+memory stays portable: silos export to the open `.silo` file format, specified
+at [onesilo/onesilo-spec](https://github.com/onesilo/onesilo-spec).
+
+**Sign up at [dashboard.onesilo.com](https://dashboard.onesilo.com/)** —
+free to start. That's the only dashboard step: the agent registers itself
+when you pair it (next step), and a dedicated silo is provisioned for it
+automatically.
+
+### 3. Pair the agent with your Silo account
 
 ```bash
-cp .env.example .env   # set BUZZ_RELAY_URL, optionally pin AGENT_SECRET_KEY
-npm run connect        # one-time OAuth pairing with the Silo control plane
+cp .env.example .env    # set BUZZ_RELAY_URL; the defaults cover the rest
+npm run connect
+```
+
+`connect` prints an authorization URL. Open it, approve, done — this is
+standard OAuth, the same flow ChatGPT, Claude, and Cursor use to connect to
+Silo. The agent then appears in your dashboard under
+**[Connections](https://dashboard.onesilo.com/connections)** as
+*Buzz Agent (@yourhandle)*, where you manage it like any connected app:
+revoke access, set rate limits, require approvals, scope which silos it can
+touch. Pairing is one-time; refresh tokens keep the agent running headlessly.
+
+### 4. Run it in your workspace
+
+```bash
 npm start
 ```
 
-Add the agent's pubkey to your channels like any coworker.
+Add the agent's pubkey to your Buzz channels like any other member (it
+prints its pubkey on first boot — pin it with `AGENT_SECRET_KEY` in `.env`).
 
-## The agent is a standard Silo MCP client
+## How it works
 
-In `mcp` mode (the default) the agent talks to the Silo control plane
-exactly like ChatGPT/Claude/Cursor do — **MCP is OAuth**:
+```
+┌────────────┐   WebSocket    ┌───────────────────┐    MCP over HTTPS    ┌──────────────────┐
+│ Buzz relay │ ─────────────▶ │ Silo Memory agent │ ───────────────────▶ │ Silo             │
+│  (signed   │ ◀───────────── │  ingest → distill │ ◀─────────────────── │  semantic recall │
+│   events)  │  signed replies│  recall → reply   │   grounded answers   │  + enrichment    │
+└────────────┘                └───────────────────┘                      └──────────────────┘
+```
 
-1. `npm run connect` discovers the OAuth server (RFC 8414), registers via
-   DCR with `client_name: "Buzz Agent (@handle)"` and
-   `client_uri: "https://buzz.xyz"`, and runs authorization_code + PKCE.
-   The agent prints the authorize URL; its human sponsor approves once in
-   a browser (loopback redirect catches the code). Refresh tokens keep the
-   agent alive headlessly from then on.
-2. The backend creates an **McpConnection** for the OAuth client — so the
-   Buzz agent shows up in the Silo dashboard's **Connections** page like
-   any other client, with the owner's full management surface: revoke,
-   rate limits, per-silo access grants, approval requirements, PII scrub,
-   injection detection, step-up auth.
-3. Every connection auto-provisions a **default cloud silo**; the agent
-   targets `silo_id: "default"`, so a freshly paired agent has a working,
-   dashboard-visible memory with zero silo configuration.
-4. Memory flows through the existing tool surface only:
-   `silo_remember` (capture → async ingestion + enrichment: entity dedupe,
-   topics, relationships), `silo_recall` (Pinecone-backed semantic recall),
-   `silo_ask` (silo-composed grounded answers, relayed verbatim to Buzz),
-   `silo_forget`, `silo_search_memories`, `silo_get_context`.
-   `silo_remember`'s `requires_confirmation` responses (content that would
-   replace existing memories) are logged and **not** auto-confirmed —
-   replacing memory is the owner's call.
+The agent speaks two open protocols and nothing else:
 
-### Proposed: an agent-native OAuth grant
-
-The one seam left: authorization_code needs a human in a browser once per
-pairing. Buzz agents already hold a cryptographic identity (their Nostr
-keypair), which suggests a first-class agent grant on the existing OAuth
-server:
-
-- **`urn:onesilo:oauth:grant-type:agent-key`** — DCR includes
-  `software_id: "buzz-agent"` and the agent's Nostr pubkey (npub). The
-  token endpoint accepts a challenge signed with the agent's key instead
-  of an authorization code; the connection starts in a `pending` state and
-  the owner approves it from the dashboard's Connections page ("Pending
-  agents"), reusing the existing step-up/challenge machinery
-  (`/api/v1/connect/challenges`). Approval binds the npub to the
-  connection, so the dashboard can display and verify *which* agent
-  identity holds the connection — the same signature-based identity model
-  Buzz itself uses. Until that lands, `npm run connect` covers pairing.
-
-## Architecture
+- **To Buzz: Nostr.** Channel messages are signed events (kind 9 with an
+  `h` channel tag); the agent verifies every signature it reads and signs
+  everything it publishes with its own keypair. NIP-42 relay auth is
+  supported.
+- **To Silo: MCP + OAuth.** The agent is a standard
+  [Model Context Protocol](https://modelcontextprotocol.io/) client of the
+  Silo platform — the same connection surface as every other MCP client.
+  Capture goes through Silo's ingestion pipeline (which enriches memories
+  with entities, topics, and relationships), recall uses Silo's semantic
+  search, and questions are answered by the silo itself, grounded in its
+  own memory. Memory-replacing writes are surfaced for owner confirmation,
+  never auto-applied by the agent.
 
 | Path | What it is |
 | --- | --- |
-| `src/buzz/` | Buzz protocol surface: event kinds & parsing (`events.ts`), agent keypair (`identity.ts`), relay transport with NIP-42 auth (`relay.ts`), in-process fake for demo/tests (`fake-relay.ts`) |
-| `src/silo/` | The memory contract (`types.ts` — `MemoryStore`) and two implementations: `local.ts` (JSON + lexical ranking, standalone) and `mcp-store.ts` (the existing `silo_*` MCP tool surface) via `mcp-client.ts` (Streamable HTTP MCP client) + `oauth.ts` (OAuth 2.1: discovery, DCR, PKCE, refresh) |
-| `src/connect.ts` | One-time OAuth pairing CLI (`npm run connect`) |
-| `src/memory/` | Distillation heuristics (`extractor.ts`) and recall/reply formatting (`recall.ts`) |
-| `src/agent.ts` | The agent: routes relay events to ingest / commands / mention-recall |
-| `demo/demo.ts` | Scripted end-to-end walkthrough |
+| `src/buzz/` | Nostr protocol surface: event parsing, agent identity, relay transport, and an in-process fake relay for demo/tests |
+| `src/silo/` | The `MemoryStore` contract with two backends: Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use |
+| `src/memory/` | Distillation heuristics and reply formatting |
+| `src/agent.ts` | The agent loop: routes events to ingest / commands / recall |
+| `src/connect.ts` | One-time OAuth pairing CLI |
+| `demo/` | Scripted end-to-end walkthrough |
 
-## Assumptions (prototype)
+## Configuration
 
-Buzz's protocol surface is isolated in `src/buzz/events.ts` so each of these
-is a one-file change once pinned against the published Buzz docs:
+Everything is environment-driven — see [`.env.example`](.env.example).
 
-1. **Channel messages are kind `9`** with the channel id in an `h` tag
-   (NIP-29-style group chat); threaded replies use `e` tags; mentions use
-   `p` tags. Relays may require NIP-42 auth (handled).
-2. **Silo integration uses only existing control-plane surface** (see "The
-   agent is a standard Silo MCP client" above): OAuth 2.1 + `/mcp` +
-   `silo_*` tools, nothing bespoke. Assumed: Buzz provenance rides as an
-   inline `[buzz kind=… channel=… author=… event=…]` trailer in
-   `silo_remember` content and is parsed back out of recalled memories —
-   a structured `metadata` passthrough on `silo_remember` would be the
-   cleaner long-term contract. Fully-autonomous (no-browser) pairing needs
-   the proposed agent-key grant.
-3. **Distillation is heuristic** (regex patterns + salience) so the demo is
-   deterministic and offline. Production swaps `extractMemories` for a call
-   into the Silo backend's multi-provider LLM layer; nothing else changes.
-4. **Live tail only** — no backfill of channel history on join, and no
-   dedup/consolidation of contradictory memories yet (see below).
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BUZZ_RELAY_URL` | `ws://localhost:7777` | Your Buzz workspace relay |
+| `BUZZ_CHANNEL_IDS` | *(all visible)* | Comma-separated channels to listen in |
+| `AGENT_HANDLE` | `silo` | The agent's @handle |
+| `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
+| `SILO_MODE` | `mcp` | `mcp` (Silo platform) or `local` (JSON file) |
+| `SILO_SERVER_URL` | `https://api.onesilo.com` | Silo control plane |
+| `SILO_ID` | `default` | Which silo to use (`default` = the agent's own) |
+| `SILO_TOKEN_PATH` | `.silo/oauth.json` | Where OAuth tokens persist |
 
-## Where this goes next
+## Privacy & control
+
+- The agent only sees channels it has been added to.
+- Memory lives in **your** silo, under **your** account. The
+  [dashboard](https://dashboard.onesilo.com/) shows the agent as a
+  connection you can inspect, limit, or revoke at any time.
+- Memory-replacing writes are never auto-confirmed by the agent.
+- Recall is auditable: every memory traces back to a signed Buzz event.
+
+## Roadmap
 
 - **Backfill & consolidation** — replay channel history on join; supersede
-  stale memories ("ship Friday" → "slipped to Monday") instead of storing both.
-- **Memory for *other* agents** — the bigger prize: expose recall through the
-  buzz-acp agent harness so every agent in the workspace gets Silo-backed
-  context injected before it acts, not just humans asking `!recall`.
-- **Structured provenance** — a `metadata` passthrough on `silo_remember`
-  so Buzz channel/author/event provenance stops riding as an inline text
-  trailer.
-- **Agent-key grant** — implement the proposed
-  `urn:onesilo:oauth:grant-type:agent-key` so agents pair without a
-  browser, with owner approval in the dashboard.
+  stale memories ("ship Friday" → "slipped to Monday") instead of keeping
+  both.
+- **Memory for other agents** — expose recall to the *other* AI agents in
+  your workspace, so every agent acts with shared context — not just humans
+  asking `!recall`.
+- **Browserless agent pairing** — a proposed OAuth extension
+  (`urn:onesilo:oauth:grant-type:agent-key`) where the agent authenticates
+  with its own Nostr key and the owner approves the pending connection from
+  the dashboard: no browser step, and the connection is cryptographically
+  bound to the same identity the agent uses in Buzz.
+- **Structured provenance** — Buzz channel/author/event provenance currently
+  rides as an inline trailer in captured content; a structured metadata
+  passthrough is the cleaner long-term contract.
+- **Protocol pinning** — Buzz's event-kind mapping lives in one file
+  (`src/buzz/events.ts`) and currently assumes NIP-29-style kind-9 channel
+  messages; it will be pinned against Buzz's published protocol docs.
+
+## Status
+
+A working prototype, developed in the open. Issues and PRs welcome.
+
+*Buzz is a product of Block, Inc. This project is an independent
+integration and is not affiliated with or endorsed by Block.*
+
+## License
+
+[Apache-2.0](LICENSE) — the same license as Buzz itself. See also
+[onesilo/onesilo-spec](https://github.com/onesilo/onesilo-spec), the open
+specification for the exportable `.silo` format.

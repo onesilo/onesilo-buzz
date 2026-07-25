@@ -55,8 +55,19 @@ export interface ScoredMemory {
  * prototype: `LocalSiloStore` (standalone demo, JSON on disk) and
  * `SiloBackendStore` (HTTP adapter to the real recap-silo-backend).
  */
+/**
+ * Honest capture outcome. "stored" means persisted now under `id`;
+ * "queued" means accepted for async ingestion (the backend assigns its own
+ * ids later); "needs_confirmation" means the write would replace existing
+ * memories and was NOT applied — the silo owner must confirm.
+ */
+export type RememberOutcome =
+  | { status: "stored"; id: string }
+  | { status: "queued" }
+  | { status: "needs_confirmation" };
+
 export interface MemoryStore {
-  remember(memory: Memory): Promise<void>;
+  remember(memory: Memory): Promise<RememberOutcome>;
   recall(query: MemoryQuery): Promise<ScoredMemory[]>;
   forget(memoryId: string): Promise<boolean>;
   /** Most recent memories, newest first. */

@@ -79,6 +79,21 @@ test("!remember stores verbatim and !forget removes it", async () => {
   assert.match(relay.published.at(-1)!.content, /Forgotten/);
 });
 
+test("mention matching does not false-positive on longer handles", async () => {
+  const { relay, say } = await setup();
+  say("@silos are the best way to organize memory, honestly");
+  await settle();
+  assert.equal(relay.published.length, 0); // @silos is not @silo
+});
+
+test("a !command after a mention runs as a command", async () => {
+  const { identity, relay, store, say } = await setup();
+  say("@silo !remember the retro moved to Mondays", "eng", [["p", identity.pubkey]]);
+  await settle();
+  assert.equal(store.size, 1);
+  assert.match(relay.published[0]!.content, /I'll remember that/);
+});
+
 test("ignores its own published events", async () => {
   const { relay, store, say } = await setup();
   say("!remember we decided the retro is on Mondays");

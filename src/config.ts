@@ -35,8 +35,14 @@ export function loadConfig(env = process.env): Config {
             serverUrl: env.SILO_SERVER_URL ?? "https://api.onesilo.com",
             siloId: env.SILO_ID ?? "default",
             tokenPath: env.SILO_TOKEN_PATH ?? ".silo/oauth.json",
-            callbackPort: Number(env.SILO_OAUTH_CALLBACK_PORT ?? 8765),
+            callbackPort: parsePort(env.SILO_OAUTH_CALLBACK_PORT, 8765),
           }
         : { mode, path: env.SILO_LOCAL_PATH ?? ".silo/memories.json" },
   };
+}
+
+/** Tolerates empty/garbage values (e.g. a blanked-out .env line). */
+function parsePort(value: string | undefined, fallback: number): number {
+  const port = parseInt(value ?? "", 10);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback;
 }

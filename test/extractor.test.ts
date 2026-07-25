@@ -35,6 +35,12 @@ test("extracts action items from commitments", () => {
   assert.equal(out[0]!.kind, "action_item");
 });
 
+test("extracts action items assigned via mention", () => {
+  const out = extractMemories(msg("@alice will rotate the staging keys tomorrow"));
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.kind, "action_item");
+});
+
 test("skips chatter and short messages", () => {
   assert.equal(extractMemories(msg("lol ok")).length, 0);
   assert.equal(extractMemories(msg("morning! standup in 5")).length, 0);

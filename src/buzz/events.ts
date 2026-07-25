@@ -49,13 +49,28 @@ export function parseChannelMessage(event: NostrEvent): ChannelMessage | null {
   };
 }
 
+/**
+ * Word-boundary mention matcher: "@silo" must not match "@silos".
+ * (Trailing `-` and `_` count as handle characters, so "@silo-bot" is a
+ * different handle too.)
+ */
+function mentionPattern(handle: string, flags = "i"): RegExp {
+  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`@${escaped}(?![\\w-])`, flags);
+}
+
 export function isAddressedTo(
   msg: ChannelMessage,
   pubkey: string,
   handle: string
 ): boolean {
   if (msg.mentionedPubkeys.includes(pubkey)) return true;
-  return msg.content.toLowerCase().includes(`@${handle.toLowerCase()}`);
+  return mentionPattern(handle).test(msg.content);
+}
+
+/** Remove @handle mentions from a message, for treating the rest as a query. */
+export function stripMention(content: string, handle: string): string {
+  return content.replace(mentionPattern(handle, "gi"), "").trim();
 }
 
 /** Build an unsigned reply in the same channel (and thread, if any). */

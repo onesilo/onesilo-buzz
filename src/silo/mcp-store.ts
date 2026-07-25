@@ -22,6 +22,7 @@ import type {
   MemoryKind,
   MemoryQuery,
   MemoryStore,
+  RememberOutcome,
   ScoredMemory,
 } from "./types.js";
 
@@ -43,17 +44,19 @@ export class McpSiloStore implements MemoryStore {
 
   /**
    * Capture via silo_remember. Provenance travels inline as a trailer the
-   * ingestion pipeline keeps with the memory. Additive captures queue
-   * immediately; a requires_confirmation response (the new content would
-   * replace existing memories) is surfaced to the log and NOT auto-confirmed
-   * — replacing the silo's memory is the owner's call, not the agent's.
+   * ingestion pipeline keeps with the memory (full author pubkey + unix
+   * timestamp, so recalled memories keep their audit trail). Additive
+   * captures queue immediately; a requires_confirmation response (the new
+   * content would replace existing memories) is surfaced and NOT
+   * auto-confirmed — replacing the silo's memory is the owner's call, not
+   * the agent's.
    */
-  async remember(memory: Memory): Promise<void> {
+  async remember(memory: Memory): Promise<RememberOutcome> {
     const content =
       `${memory.content}\n\n` +
       `[buzz kind=${memory.kind} salience=${memory.salience} ` +
-      `channel=${memory.source.channelId} author=${memory.source.authorPubkey.slice(0, 12)} ` +
-      `event=${memory.source.eventId}]`;
+      `channel=${memory.source.channelId} author=${memory.source.authorPubkey} ` +
+      `event=${memory.source.eventId} ts=${memory.source.createdAt}]`;
     const { payload } = await this.mcp.callTool("silo_remember", {
       silo_id: this.siloId,
       content,
@@ -63,19 +66,30 @@ export class McpSiloStore implements MemoryStore {
       this.log(
         `silo_remember requires confirmation (would replace existing memories) — skipped: ${memory.content}`
       );
+      return { status: "needs_confirmation" };
     }
+    return { status: "queued" };
   }
 
   async recall(query: MemoryQuery): Promise<ScoredMemory[]> {
+    const limit = query.limit ?? 5;
     const { payload } = await this.mcp.callTool("silo_recall", {
       silo_id: this.siloId,
       query: query.text,
-      max_results: Math.min(25, query.limit ?? 5),
+      // over-fetch when channel-filtering, since we filter client-side
+      max_results: Math.min(25, query.channelId ? limit * 3 : limit),
     });
     const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
-    return hits.map((h) => ({ memory: toMemory(h), score: h.score ?? 0 }));
+    const out: ScoredMemory[] = [];
+    for (const h of hits) {
+      const memory = toMemory(h);
+      if (query.channelId && memory.source.channelId !== query.channelId) continue;
+      out.push({ memory, score: h.score ?? 0 });
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   async ask(question: string): Promise<string> {
@@ -101,8 +115,10 @@ export class McpSiloStore implements MemoryStore {
       memory_ids: [memoryId],
     });
     if (isError) return false;
+    // Only report success on confirmed deletion — an unexpected payload
+    // shape must not read as "forgotten".
     const deleted = (payload as { deleted?: unknown[] })?.deleted;
-    return Array.isArray(deleted) ? deleted.length > 0 : true;
+    return Array.isArray(deleted) && deleted.length > 0;
   }
 
   /** Deterministic scan; used only when overview() isn't the better fit. */
@@ -125,7 +141,7 @@ export class McpSiloStore implements MemoryStore {
 function toMemory(hit: RecallHit): Memory {
   const content = hit.content ?? "";
   const trailer = content.match(
-    /\[buzz kind=(\S+) salience=([\d.]+) channel=(\S+) author=(\S+) event=(\S+)\]/
+    /\[buzz kind=(\S+) salience=([\d.]+) channel=(\S+) author=(\S+) event=(\S+) ts=(\d+)\]/
   );
   const body = trailer ? content.slice(0, trailer.index).trim() : content;
   const kind = trailer?.[1] ?? hit.type ?? "fact";
@@ -138,7 +154,7 @@ function toMemory(hit: RecallHit): Memory {
       eventId: trailer?.[5] ?? "",
       authorPubkey: trailer?.[4] ?? "",
       channelId: trailer?.[3] ?? "",
-      createdAt: 0,
+      createdAt: trailer ? Number(trailer[6]) : 0,
     },
     salience: trailer ? Number(trailer[2]) : 0.5,
     tags: [],

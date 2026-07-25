@@ -16,9 +16,17 @@ const KIND_LABEL: Record<Memory["kind"], string> = {
 };
 
 function cite(m: Memory, names: Map<string, string>): string {
-  const who = names.get(m.source.authorPubkey) ?? m.source.authorPubkey.slice(0, 8);
-  const when = new Date(m.source.createdAt * 1000).toISOString().slice(0, 10);
-  return `${who}, ${when}, event ${m.source.eventId.slice(0, 8)}`;
+  const parts: string[] = [];
+  if (m.source.authorPubkey) {
+    parts.push(names.get(m.source.authorPubkey) ?? m.source.authorPubkey.slice(0, 8));
+  }
+  // A store may not know the timestamp (createdAt 0) — omit rather than
+  // print a misleading 1970 date.
+  if (m.source.createdAt) {
+    parts.push(new Date(m.source.createdAt * 1000).toISOString().slice(0, 10));
+  }
+  if (m.source.eventId) parts.push(`event ${m.source.eventId.slice(0, 8)}`);
+  return parts.length ? parts.join(", ") : "provenance unknown";
 }
 
 export function formatRecall(
