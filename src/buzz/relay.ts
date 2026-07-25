@@ -37,6 +37,7 @@ export class WebSocketRelay implements BuzzRelay {
   private subscriptions = new Map<string, Record<string, unknown>>();
   private closed = false;
   private reconnectDelayMs = 1000;
+  private reconnectTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly url: string,
@@ -54,6 +55,7 @@ export class WebSocketRelay implements BuzzRelay {
    * events is handled by the agent's event-id dedup.
    */
   private open(onOpen?: () => void, onFail?: (err: Error) => void): void {
+    if (this.closed) return;
     const ws = new WebSocket(this.url);
     this.ws = ws;
     let opened = false;
@@ -73,7 +75,7 @@ export class WebSocketRelay implements BuzzRelay {
       if (!opened && onFail) return; // initial connect failed; caller was rejected
       const delay = this.reconnectDelayMs;
       this.reconnectDelayMs = Math.min(delay * 2, 30_000);
-      setTimeout(() => this.open(), delay);
+      this.reconnectTimer = setTimeout(() => this.open(), delay);
     });
     ws.on("message", (data) => this.onMessage(String(data)));
   }
@@ -138,6 +140,7 @@ export class WebSocketRelay implements BuzzRelay {
 
   close(): void {
     this.closed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
   }
 }

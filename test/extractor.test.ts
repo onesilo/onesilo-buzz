@@ -53,6 +53,14 @@ test("broad fact pattern requires substance", () => {
   assert.equal(out[0]!.kind, "fact");
 });
 
+test("isQuestion: '?' and WH-openers are questions; bare modals are not", async () => {
+  const { isQuestion } = await import("../src/memory/extractor.js");
+  assert.equal(isQuestion("what did we decide"), true);
+  assert.equal(isQuestion("should we use bun?"), true);
+  assert.equal(isQuestion("will ship the payments migration on Friday"), false);
+  assert.equal(isQuestion("is the new deploy pipeline ready to use now"), false);
+});
+
 test("explicit memories store verbatim with max salience", () => {
   const m = explicitMemory(msg("!remember rollback = flag payments-v1"), "rollback = flag payments-v1");
   assert.equal(m.kind, "explicit");

@@ -29,13 +29,17 @@ const PATTERNS: Pattern[] = [
 const MIN_TOKENS = 4; // skip "ok", "lol", emoji-only, etc.
 const FACT_MIN_TOKENS = 7; // the "fact" pattern is broad; demand more substance
 
-const INTERROGATIVE =
-  /^(what|who|whom|whose|when|where|why|how|which|did|do|does|is|are|was|were|can|could|will|would|should|has|have|had)\b/i;
+/**
+ * Only unambiguous interrogative openers count when there's no "?": modals
+ * like "will/should/is" often open elliptical statements ("will ship
+ * Friday"), and skipping those would drop capturable decisions.
+ */
+const WH_INTERROGATIVE = /^(what|who|whom|whose|when|where|why|how|which)\b/i;
 
 /** Questions are requests for memory, not memory — don't distill them. */
 export function isQuestion(text: string): boolean {
   const t = text.trim();
-  return /\?\s*$/.test(t) || INTERROGATIVE.test(t);
+  return /\?\s*$/.test(t) || WH_INTERROGATIVE.test(t);
 }
 
 export function memoryId(eventId: string, suffix = "0"): string {
