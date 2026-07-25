@@ -2,7 +2,7 @@
  * Turns raw Buzz channel messages into memory candidates.
  *
  * The prototype uses transparent heuristics so the demo is deterministic and
- * dependency-free. In production this becomes a call into the Silo backend's
+ * dependency-free. In production this becomes a call into the One Silo backend's
  * LLM layer (which already does multi-provider routing) with a distillation
  * prompt; the interface stays the same, so only `extractMemories` changes.
  */

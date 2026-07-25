@@ -3,7 +3,7 @@
  *
  * Behavior:
  *  - Passively listens to every channel it's been added to and distills
- *    messages into memories stored in the Silo (silent — it never replies
+ *    messages into memories stored in the silo (silent — it never replies
  *    unless spoken to).
  *  - Commands (anywhere in a channel it can see):
  *      !remember <text>   store verbatim, confirm in-thread
@@ -192,7 +192,7 @@ export class SiloMemoryAgent {
           case "needs_confirmation":
             return this.reply(
               msg,
-              "That would update existing memories, so I didn't apply it — the silo owner can confirm the change from the Silo dashboard."
+              "That would update existing memories, so I didn't apply it — the silo owner can confirm the change from the One Silo dashboard."
             );
         }
         return;
@@ -231,7 +231,7 @@ export class SiloMemoryAgent {
     if (!query) {
       return this.reply(
         msg,
-        "Hi! I give this workspace memory via Silo. Try `!recall <query>`, `!remember <text>`, or `!memories`."
+        "Hi! I give this workspace memory, powered by One Silo. Try `!recall <query>`, `!remember <text>`, or `!memories`."
       );
     }
     const response = await this.answer(query, msg.channelId);

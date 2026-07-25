@@ -1,5 +1,5 @@
 /**
- * Minimal MCP client over Streamable HTTP — the same transport the Silo
+ * Minimal MCP client over Streamable HTTP — the same transport the One Silo
  * control plane serves at /mcp for ChatGPT, Claude Desktop, and Cursor.
  *
  * Handles: initialize / notifications/initialized handshake, Mcp-Session-Id

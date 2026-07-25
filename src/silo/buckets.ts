@@ -1,7 +1,7 @@
 /**
  * Memory-bucket routing: which silo backs which Buzz channel.
  *
- * A connection on the Silo control plane can hold access grants to any
+ * A connection on the One Silo control plane can hold access grants to any
  * number of silos (managed from the dashboard's Connections page), and every
  * silo_* tool takes a silo_id — so one Buzz agent can spread its channels
  * across multiple memory buckets, and multiple Buzz agents pointed at the
@@ -17,7 +17,7 @@ export class SiloBucketRouter {
     private readonly channelMap: Map<string, string> = new Map()
   ) {}
 
-  /** Silo id for an interaction in the given channel. */
+  /** The silo id for an interaction in the given channel. */
   resolve(channelId?: string): string {
     if (channelId) {
       const mapped = this.channelMap.get(channelId);

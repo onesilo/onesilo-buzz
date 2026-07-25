@@ -1,5 +1,5 @@
 /**
- * Memory model shared by every Silo store implementation.
+ * Memory model shared by every silo store implementation.
  *
  * A "memory" is a distilled, durable fact extracted from Buzz conversation —
  * not a raw chat log line. Raw provenance (event id, channel, author) is kept
@@ -56,7 +56,7 @@ export interface ScoredMemory {
 }
 
 /**
- * The contract every Silo backend fulfils. Two implementations ship in this
+ * The contract every silo backend fulfils. Two implementations ship in this
  * prototype: `LocalSiloStore` (standalone demo, JSON on disk) and
  * `SiloBackendStore` (HTTP adapter to the real recap-silo-backend).
  */
@@ -86,7 +86,7 @@ export interface MemoryStore {
    * the agent falls back to recall + local formatting.
    */
   ask?(question: string, channelId?: string): Promise<string>;
-  /** Silo-composed overview of the channel's bucket (used by !memories). */
+  /** A silo-composed overview of the channel's bucket (used by !memories). */
   overview?(channelId?: string): Promise<string>;
   /**
    * Optional startup hook: discover what the connection can reach

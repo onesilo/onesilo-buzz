@@ -1,8 +1,8 @@
 /**
  * One-time pairing CLI: registers the Buzz agent as an OAuth client on the
- * Silo control plane and runs the authorization_code + PKCE flow. Prints the
+ * One Silo control plane and runs the authorization_code + PKCE flow. Prints the
  * authorize URL for the agent's human sponsor; once approved, the connection
- * (and its auto-provisioned default silo) appears in the Silo dashboard.
+ * (and its auto-provisioned default silo) appears in the One Silo dashboard.
  *
  *   npm run connect
  */
