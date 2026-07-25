@@ -49,10 +49,12 @@ export class WebSocketRelay implements BuzzRelay {
    * Ring buffer of recently sent events, re-sent after a NIP-42 AUTH
    * exchange: a relay that enforces auth-before-publish drops EVENTs sent
    * in the window between socket-open and auth completion. Re-sending is
-   * safe — relays deduplicate by event id.
+   * safe — relays deduplicate by event id. Sized to OUTBOX_MAX so a full
+   * outbox flush is always replayable — a smaller ring would silently
+   * lose the earliest events of a large post-reconnect burst.
    */
   private recentlySent: NostrEvent[] = [];
-  private static readonly RECENT_MAX = 50;
+  private static readonly RECENT_MAX = WebSocketRelay.OUTBOX_MAX;
 
   constructor(
     private readonly url: string,

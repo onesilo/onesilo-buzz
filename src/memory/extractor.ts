@@ -30,16 +30,27 @@ const MIN_TOKENS = 4; // skip "ok", "lol", emoji-only, etc.
 const FACT_MIN_TOKENS = 7; // the "fact" pattern is broad; demand more substance
 
 /**
- * Only unambiguous interrogative openers count when there's no "?": modals
- * like "will/should/is" often open elliptical statements ("will ship
- * Friday"), and skipping those would drop capturable decisions.
+ * Question detection without a trailing "?" is heuristic. Unambiguous
+ * signals only:
+ *  - WH-openers ("what did we decide…")
+ *  - aux + pronoun inversion ("can you…", "did anyone…") — a bare modal
+ *    ("will ship Friday") is an elliptical statement and stays capturable
+ *  - explicit recall phrasings ("remind me…", "does anyone know…")
  */
 const WH_INTERROGATIVE = /^(what|who|whom|whose|when|where|why|how|which)\b/i;
+const AUX_INTERROGATIVE =
+  /^(can|could|would|will|shall|should|do|does|did|is|are|was|were|has|have|had)\s+(you|we|i|anyone|someone|somebody|they|he|she|it)\b/i;
+const RECALL_REQUEST = /\b(remind me|do you know|does anyone know|any idea)\b/i;
 
 /** Questions are requests for memory, not memory — don't distill them. */
 export function isQuestion(text: string): boolean {
   const t = text.trim();
-  return /\?\s*$/.test(t) || WH_INTERROGATIVE.test(t);
+  return (
+    /\?\s*$/.test(t) ||
+    WH_INTERROGATIVE.test(t) ||
+    AUX_INTERROGATIVE.test(t) ||
+    RECALL_REQUEST.test(t)
+  );
 }
 
 export function memoryId(eventId: string, suffix = "0"): string {

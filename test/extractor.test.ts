@@ -64,8 +64,17 @@ test("isQuestion: '?' and WH-openers are questions; bare modals are not", async 
   const { isQuestion } = await import("../src/memory/extractor.js");
   assert.equal(isQuestion("what did we decide"), true);
   assert.equal(isQuestion("should we use bun?"), true);
+  assert.equal(isQuestion("can you remind me what we decided about payments"), true);
+  assert.equal(isQuestion("did anyone rotate the staging keys"), true);
   assert.equal(isQuestion("will ship the payments migration on Friday"), false);
   assert.equal(isQuestion("is the new deploy pipeline ready to use now"), false);
+});
+
+test("embedded recall requests are not distilled as memory", () => {
+  const out = extractMemories(
+    msg("can you remind me what we decided about the payments migration")
+  );
+  assert.equal(out.length, 0);
 });
 
 test("explicit memories store verbatim with max salience", () => {
