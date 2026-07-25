@@ -122,6 +122,13 @@ export class SiloMemoryAgent {
   /**
    * Run a command/mention handler; if the silo errors, tell the channel
    * instead of failing silently (passive ingest errors only hit the log).
+   *
+   * Failed commands/mentions deliberately STAY deduped: the human got an
+   * explicit error reply and their retry is a new event (new id), which is
+   * the interactive retry path. Un-marking would let a relay redelivery
+   * re-run the command later and post an out-of-context duplicate reply.
+   * Passive ingest is the opposite — no human in the loop — so only there
+   * does a failure un-mark the event to make redelivery a retry.
    */
   private async answering(
     msg: ChannelMessage,
