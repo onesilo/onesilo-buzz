@@ -58,7 +58,7 @@ local JSON store (see below).
 | Path | What it is |
 | --- | --- |
 | `src/buzz/` | Buzz protocol surface: event kinds & parsing (`events.ts`), agent keypair (`identity.ts`), relay transport with NIP-42 auth (`relay.ts`), in-process fake for demo/tests (`fake-relay.ts`) |
-| `src/silo/` | The memory contract (`types.ts` — `MemoryStore`) and two implementations: `local.ts` (JSON + lexical ranking, standalone) and `client.ts` (HTTP adapter to recap-silo-backend) |
+| `src/silo/` | The memory contract (`types.ts` — `MemoryStore`) and two implementations: `local.ts` (JSON + lexical ranking, standalone) and `client.ts` (adapter to recap-silo-backend: REST memory CRUD + MCP `silo_recall`) |
 | `src/memory/` | Distillation heuristics (`extractor.ts`) and recall/reply formatting (`recall.ts`) |
 | `src/agent.ts` | The agent: routes relay events to ingest / commands / mention-recall |
 | `demo/demo.ts` | Scripted end-to-end walkthrough |
@@ -71,11 +71,21 @@ is a one-file change once pinned against the published Buzz docs:
 1. **Channel messages are kind `9`** with the channel id in an `h` tag
    (NIP-29-style group chat); threaded replies use `e` tags; mentions use
    `p` tags. Relays may require NIP-42 auth (handled).
-2. **The Silo backend memory API doesn't exist yet.** `src/silo/client.ts` is
-   the proposed contract, shaped to backend conventions
-   (`POST /api/v1/silos/{id}/memories`, `POST …/memories/search`, …). The
-   `MemoryStore` interface is the seam: the agent doesn't care which side of
-   it it's talking to.
+2. **The Silo backend memory API is real and `src/silo/client.ts` targets
+   it directly**: memory CRUD via
+   `POST/GET/DELETE /api/v1/share/silos/{silo_id}/memories` (each mutation
+   triggers a server-side Pinecone re-index), and semantic recall via the
+   MCP gateway (`tools/call silo_recall` at `/mcp`), which returns scored
+   memory matches from the silo's vector namespace. Buzz provenance
+   (channel, author pubkey, source event id, salience) round-trips through
+   the memory `metadata` field. Assumed here: the agent authenticates with
+   a bearer token that passes the backend's Clerk auth (a service identity
+   for the agent is an open item), and recall hydrates provenance by
+   joining `silo_recall` hits against the REST memory list. Richer
+   integration is available and unused so far: `silo_remember` (async
+   ingestion + conflict confirmation), `silo_ask` (silo-composed answers),
+   entity/topic/relationship graphs, and the per-silo MCP mount
+   (`/api/v1/silos/{id}/mcp`).
 3. **Distillation is heuristic** (regex patterns + salience) so the demo is
    deterministic and offline. Production swaps `extractMemories` for a call
    into the Silo backend's multi-provider LLM layer; nothing else changes.
