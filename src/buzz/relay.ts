@@ -38,6 +38,9 @@ export class WebSocketRelay implements BuzzRelay {
   private closed = false;
   private reconnectDelayMs = 1000;
   private reconnectTimer?: NodeJS.Timeout;
+  /** Signed events waiting for the socket to (re)open; FIFO, bounded. */
+  private outbox: NostrEvent[] = [];
+  private static readonly OUTBOX_MAX = 1000;
 
   constructor(
     private readonly url: string,
@@ -64,6 +67,12 @@ export class WebSocketRelay implements BuzzRelay {
       this.reconnectDelayMs = 1000;
       for (const [subId, filter] of this.subscriptions) {
         ws.send(JSON.stringify(["REQ", subId, filter]));
+      }
+      // Flush replies that were published while disconnected.
+      const pending = this.outbox;
+      this.outbox = [];
+      for (const event of pending) {
+        ws.send(JSON.stringify(["EVENT", event]));
       }
       onOpen?.();
     });
@@ -132,9 +141,16 @@ export class WebSocketRelay implements BuzzRelay {
   }
 
   publish(template: EventTemplate): Promise<NostrEvent> {
-    if (!this.ws) throw new Error("relay not connected");
+    if (this.closed) throw new Error("relay closed");
     const event = finalizeEvent(template, this.identity.secretKey);
-    this.ws.send(JSON.stringify(["EVENT", event]));
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(["EVENT", event]));
+    } else {
+      // Mid-reconnect: hold the signed event and flush it when the socket
+      // reopens, instead of throwing the reply away.
+      this.outbox.push(event);
+      if (this.outbox.length > WebSocketRelay.OUTBOX_MAX) this.outbox.shift();
+    }
     return Promise.resolve(event);
   }
 
