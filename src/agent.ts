@@ -215,7 +215,13 @@ export class SiloMemoryAgent {
     // ("@silo we decided to ship Friday"). Distill the mention-stripped
     // text unless it reads as a question.
     if (!isQuestion(query)) {
-      await this.ingest({ ...msg, content: query });
+      try {
+        await this.ingest({ ...msg, content: query });
+      } catch (err) {
+        // The answer already landed — a capture failure here must not send
+        // a confusing second (error) reply; it only hits the log.
+        this.log(`mention capture failed ${msg.event.id.slice(0, 8)}: ${err}`);
+      }
     }
   }
 

@@ -39,7 +39,11 @@ export class WebSocketRelay implements BuzzRelay {
   private reconnectDelayMs = 1000;
   private reconnectTimer?: NodeJS.Timeout;
   /** Signed events waiting for the socket to (re)open; FIFO, bounded. */
-  private outbox: NostrEvent[] = [];
+  private outbox: Array<{
+    event: NostrEvent;
+    resolve: (event: NostrEvent) => void;
+    reject: (err: Error) => void;
+  }> = [];
   private static readonly OUTBOX_MAX = 1000;
 
   constructor(
@@ -79,8 +83,9 @@ export class WebSocketRelay implements BuzzRelay {
       // Flush replies that were published while disconnected.
       const pending = this.outbox;
       this.outbox = [];
-      for (const event of pending) {
-        ws.send(JSON.stringify(["EVENT", event]));
+      for (const p of pending) {
+        ws.send(JSON.stringify(["EVENT", p.event]));
+        p.resolve(p.event);
       }
       onOpen?.();
     });
@@ -88,8 +93,14 @@ export class WebSocketRelay implements BuzzRelay {
       if (!opened) onFail?.(err as Error);
     });
     ws.on("close", () => {
+      // A close before open settles the initial connect() promise — whether
+      // the connect failed or close() was called mid-handshake, the caller
+      // must not be left awaiting forever. (Extra settles are no-ops.)
+      if (!opened && onFail) {
+        onFail(new Error("relay connection closed before it opened"));
+        return;
+      }
       if (this.closed || this.ws !== ws) return;
-      if (!opened && onFail) return; // initial connect failed; caller was rejected
       const delay = this.reconnectDelayMs;
       this.reconnectDelayMs = Math.min(delay * 2, 30_000);
       this.reconnectTimer = setTimeout(() => this.open(), delay);
@@ -149,22 +160,33 @@ export class WebSocketRelay implements BuzzRelay {
   }
 
   publish(template: EventTemplate): Promise<NostrEvent> {
-    if (this.closed) throw new Error("relay closed");
+    if (this.closed) return Promise.reject(new Error("relay closed"));
     const event = finalizeEvent(template, this.identity.secretKey);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(["EVENT", event]));
-    } else {
-      // Mid-reconnect: hold the signed event and flush it when the socket
-      // reopens, instead of throwing the reply away.
-      this.outbox.push(event);
-      if (this.outbox.length > WebSocketRelay.OUTBOX_MAX) this.outbox.shift();
+      return Promise.resolve(event);
     }
-    return Promise.resolve(event);
+    // Mid-reconnect: hold the signed event and settle the promise only when
+    // it actually flushes — callers must not believe a queued event was
+    // delivered if the relay shuts down first.
+    return new Promise((resolve, reject) => {
+      this.outbox.push({ event, resolve, reject });
+      if (this.outbox.length > WebSocketRelay.OUTBOX_MAX) {
+        this.outbox
+          .shift()
+          ?.reject(new Error("relay outbox overflow — event dropped"));
+      }
+    });
   }
 
   close(): void {
     this.closed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    const pending = this.outbox;
+    this.outbox = [];
+    for (const p of pending) {
+      p.reject(new Error("relay closed before the event was delivered"));
+    }
     this.ws?.close();
   }
 }
