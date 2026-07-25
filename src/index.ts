@@ -38,6 +38,12 @@ if (config.silo.mode === "mcp") {
     console.error("Not paired with Silo yet. Run: npm run connect");
     process.exit(1);
   }
+  if (!oauth.canRefresh) {
+    log(
+      "warning: paired without a refresh token — the agent will stop working " +
+        "when the current access token expires. Re-run `npm run connect` to fix."
+    );
+  }
   const mcp = new McpClient(`${config.silo.serverUrl}/mcp`, oauth);
   store = new McpSiloStore(mcp, config.silo.siloId, log);
 } else {

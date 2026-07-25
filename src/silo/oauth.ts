@@ -63,6 +63,15 @@ export class SiloOAuthClient {
     return Boolean(this.creds?.refresh_token || this.creds?.access_token);
   }
 
+  /**
+   * False when pairing is degraded: only an access token is stored, so the
+   * agent works until it expires and then needs a manual re-pair. Callers
+   * should warn at startup rather than fail later.
+   */
+  get canRefresh(): boolean {
+    return Boolean(this.creds?.refresh_token);
+  }
+
   private persist(): void {
     mkdirSync(dirname(this.config.tokenPath), { recursive: true });
     writeFileSync(this.config.tokenPath, JSON.stringify(this.creds, null, 2), { mode: 0o600 });
