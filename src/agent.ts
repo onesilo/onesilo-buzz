@@ -35,7 +35,7 @@ export interface AgentOptions {
   log?: (line: string) => void;
 }
 
-const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/;
+const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/i;
 
 const SEEN_EVENTS_MAX = 2000;
 
@@ -99,7 +99,7 @@ export class SiloMemoryAgent {
     const command = msg.content.trim().match(COMMAND);
     if (command) {
       await this.answering(msg, () =>
-        this.handleCommand(msg, command[1]!, (command[2] ?? "").trim())
+        this.handleCommand(msg, command[1]!.toLowerCase(), (command[2] ?? "").trim())
       );
       return;
     }
@@ -226,7 +226,7 @@ export class SiloMemoryAgent {
     const query = stripMention(msg.content, this.identity.handle);
     const command = query.match(COMMAND);
     if (command) {
-      return this.handleCommand(msg, command[1]!, (command[2] ?? "").trim());
+      return this.handleCommand(msg, command[1]!.toLowerCase(), (command[2] ?? "").trim());
     }
     if (!query) {
       return this.reply(

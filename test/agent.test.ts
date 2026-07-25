@@ -124,6 +124,17 @@ test("a failed passive capture is retryable via redelivery", async () => {
   assert.equal(attempts, 2);
 });
 
+test("bang commands are case-insensitive", async () => {
+  const { relay, store, say } = await setup();
+  say("!Remember the retro moved to Mondays");
+  await settle();
+  assert.equal(store.size, 1);
+  say("!RECALL retro schedule", "support");
+  await settle();
+  assert.equal(relay.published.length, 2);
+  assert.match(relay.published[1]!.content, /retro moved to Mondays/);
+});
+
 test("a p tag alone does not trigger a reply (listen unless spoken to)", async () => {
   const { identity, relay, say } = await setup();
   say("heads up: deploy happening later for the payments team", "eng", [["p", identity.pubkey]]);
