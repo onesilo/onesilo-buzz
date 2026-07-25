@@ -1,0 +1,28 @@
+{
+  "name": "@onesilo/buzz-silo-memory",
+  "version": "0.1.0",
+  "description": "Prototype: gives Buzz (buzz.xyz) long-term memory using Silo. A Buzz agent that ingests channel conversation into a Silo and answers with recalled context.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "demo": "tsx demo/demo.ts",
+    "test": "tsx --test test/*.test.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.6.0",
+    "nostr-tools": "^2.10.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
