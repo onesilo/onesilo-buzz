@@ -76,6 +76,9 @@ export function extractMemories(msg: ChannelMessage): Memory[] {
   const text = msg.content.trim();
   const tokens = tokenize(text);
   if (tokens.length < MIN_TOKENS) return [];
+  // Questions are recall requests, not memory — a long "what/why/how …?"
+  // can otherwise trip the broad fact pattern.
+  if (isQuestion(text)) return [];
 
   for (const p of PATTERNS) {
     if (!p.regex.test(text)) continue;

@@ -124,10 +124,15 @@ export class SiloMemoryAgent {
       await handler();
     } catch (err) {
       this.log(`error answering ${msg.event.id.slice(0, 8)}: ${err}`);
-      await this.reply(
-        msg,
-        "Sorry — I hit an error talking to the silo. Please try again in a moment."
-      );
+      try {
+        await this.reply(
+          msg,
+          "Sorry — I hit an error talking to the silo. Please try again in a moment."
+        );
+      } catch (replyErr) {
+        // Relay down too — nothing left to do but record both failures.
+        this.log(`failed to deliver error reply ${msg.event.id.slice(0, 8)}: ${replyErr}`);
+      }
     }
   }
 

@@ -41,6 +41,13 @@ test("extracts action items assigned via mention", () => {
   assert.equal(out[0]!.kind, "action_item");
 });
 
+test("passive extraction skips questions even when patterns match", () => {
+  const out = extractMemories(
+    msg("what are the payment migration deadlines for the launch this quarter?")
+  );
+  assert.equal(out.length, 0);
+});
+
 test("skips chatter and short messages", () => {
   assert.equal(extractMemories(msg("lol ok")).length, 0);
   assert.equal(extractMemories(msg("morning! standup in 5")).length, 0);

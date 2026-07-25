@@ -45,6 +45,14 @@ export class McpClient {
       return this.post(body, false);
     }
     if (!res.ok && res.status !== 202) {
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        // Auth or session is dead (404 = expired session per Streamable
+        // HTTP; 401 here means the refresh retry failed too). Drop the
+        // session so the next call re-initializes instead of failing
+        // forever on stale state.
+        this.sessionId = undefined;
+        this.initialized = false;
+      }
       throw new Error(`MCP ${this.url} -> ${res.status}`);
     }
     const newSession = res.headers.get("mcp-session-id");

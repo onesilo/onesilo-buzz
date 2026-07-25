@@ -142,6 +142,32 @@ test("an empty tools/call response is an error, not a silent success", async () 
   );
 });
 
+test("a dead session (404) resets state and the next call re-initializes", async () => {
+  let initializes = 0;
+  let failNext = true;
+  stubFetch((req) => {
+    if (req.body.method === "initialize") {
+      initializes += 1;
+      return jsonResponse(
+        { jsonrpc: "2.0", id: req.body.id, result: {} },
+        { "mcp-session-id": `sess-${initializes}` }
+      );
+    }
+    if (req.body.method === "notifications/initialized") {
+      return new Response(null, { status: 202 });
+    }
+    if (failNext) {
+      failNext = false;
+      return new Response("session expired", { status: 404 });
+    }
+    return jsonResponse({ jsonrpc: "2.0", id: req.body.id, result: { structuredContent: {} } });
+  });
+  const client = new McpClient(URL_, fakeOauth(["tok"]));
+  await assert.rejects(() => client.callTool("silo_recall", { silo_id: "default", query: "x" }));
+  await client.callTool("silo_recall", { silo_id: "default", query: "x" }); // recovers
+  assert.equal(initializes, 2);
+});
+
 test("parses single-event SSE response bodies", async () => {
   stubFetch((req) => {
     if (req.body.method === "initialize") {
