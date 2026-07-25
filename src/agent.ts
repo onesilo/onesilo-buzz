@@ -234,7 +234,16 @@ export class SiloMemoryAgent {
         "Hi! I give this workspace memory via Silo. Try `!recall <query>`, `!remember <text>`, or `!memories`."
       );
     }
-    await this.reply(msg, await this.answer(query, msg.channelId));
+    const response = await this.answer(query, msg.channelId);
+    // Reply first (latency), but hold any delivery failure so the
+    // side-capture below runs regardless — a statement worth keeping must
+    // not be lost just because the reply couldn't reach the relay.
+    let deliveryFailure: unknown;
+    try {
+      await this.reply(msg, response);
+    } catch (err) {
+      deliveryFailure = err;
+    }
     // Questions addressed to the agent are requests for memory, not memory
     // — but a mention can also carry a statement worth keeping
     // ("@silo we decided to ship Friday"). Distill the mention-stripped
@@ -243,15 +252,16 @@ export class SiloMemoryAgent {
       try {
         await this.ingest({ ...msg, content: query });
       } catch (err) {
-        // The answer already landed — a capture failure here must not send
-        // a confusing second (error) reply; it only hits the log. The event
-        // deliberately STAYS marked seen: un-marking (as the passive path
-        // does) would make a relay redelivery answer the mention a second
-        // time, and a duplicated answer is worse than a lost side-capture —
-        // the statement can always be stored explicitly with !remember.
+        // The answer path already ran — a capture failure here must not
+        // send a confusing second (error) reply; it only hits the log. The
+        // event deliberately STAYS marked seen: un-marking (as the passive
+        // path does) would make a relay redelivery answer the mention a
+        // second time, and a duplicated answer is worse than a lost
+        // side-capture — !remember covers the explicit path.
         this.log(`mention capture failed ${msg.event.id.slice(0, 8)}: ${err}`);
       }
     }
+    if (deliveryFailure) throw deliveryFailure; // answering() logs DeliveryError
   }
 
   /**

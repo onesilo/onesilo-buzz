@@ -124,6 +124,37 @@ test("a failed passive capture is retryable via redelivery", async () => {
   assert.equal(attempts, 2);
 });
 
+test("a mention statement is still captured when reply delivery fails", async () => {
+  const identity = loadIdentity("silo");
+  const store = new LocalSiloStore();
+  const logs: string[] = [];
+  const deadRelay = {
+    connect: async () => {},
+    subscribeChannels: () => {},
+    publish: async () => {
+      throw new Error("relay closed");
+    },
+    close: () => {},
+  };
+  const agent = new SiloMemoryAgent(deadRelay, store, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  await agent.handleEvent(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "@silo we decided to ship the payments migration on Friday",
+      },
+      generateSecretKey()
+    )
+  );
+  assert.equal(store.size, 1); // captured despite the failed reply
+  assert.match(logs.join("\n"), /could not deliver reply/);
+});
+
 test("bang commands are case-insensitive", async () => {
   const { relay, store, say } = await setup();
   say("!Remember the retro moved to Mondays");

@@ -159,7 +159,10 @@ export class SiloOAuthClient {
           return;
         }
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end("<h3>Buzz agent paired with Silo. You can close this tab.</h3>");
+        // The token exchange hasn't run yet — don't claim success here.
+        res.end(
+          "<h3>Authorization received.</h3><p>Return to the terminal to see whether pairing completed. You can close this tab.</p>"
+        );
         server.close();
         resolve(code);
       });
