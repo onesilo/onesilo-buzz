@@ -84,7 +84,15 @@ export class NodeDistillingStore implements MemoryStore {
     let held = 0;
     for (const s of statements) {
       const outcome = await this.inner.remember(toMemory(s, segment, anchor));
-      if (outcome.status === "needs_confirmation") held += 1;
+      if (outcome.status === "needs_confirmation") {
+        held += 1;
+        // A hold is not a failure and retrying cannot resolve it (the same
+        // confirmation requirement would fire again) — the owner confirms
+        // from the dashboard. Name the statement so the operator can act.
+        this.log(
+          `statement held for owner confirmation [${s.kind}] ${s.content.slice(0, 100)}`
+        );
+      }
     }
     this.log(
       `node distillation (${model}): ${statements.length} statement(s) from ` +
@@ -133,11 +141,22 @@ export function wrapWithNodeDistillation(
   return store;
 }
 
-/** The distillation prompt: transcript in, one memory statement per line out. */
+/**
+ * The distillation prompt: transcript in, one memory statement per line
+ * out. Overlap turns (already captured by the previous segment) are
+ * presented as a separate context block the model must not extract from —
+ * they exist only to resolve references in the new turns.
+ */
 export function distillPrompt(segment: TranscriptSegment): string {
-  const lines = segment.turns
-    .map((t) => `[${t.authorPubkey.slice(0, 8)}] ${t.content}`)
-    .join("\n");
+  const fmt = (t: Turn) => `[${t.authorPubkey.slice(0, 8)}] ${t.content}`;
+  const contextCount = segment.turns.length - segment.fresh.length;
+  const context = segment.turns.slice(0, contextCount).map(fmt).join("\n");
+  const fresh = segment.fresh.map(fmt).join("\n");
+  const transcript = context
+    ? `Earlier context, ALREADY captured — do NOT extract memories from these ` +
+      `lines, they only resolve references:\n${context}\n\n` +
+      `New conversation (extract from these lines only):\n${fresh}`
+    : `Transcript:\n${fresh}`;
   return (
     `You are a memory distiller for a team workspace. Read the conversation ` +
     `transcript and extract the durable memories worth keeping long-term: ` +
@@ -151,7 +170,7 @@ export function distillPrompt(segment: TranscriptSegment): string {
     `chit-chat, questions, and process noise.\n` +
     `- No commentary, no numbering, nothing but the lines.\n` +
     `- If nothing is worth remembering, output exactly: NONE\n\n` +
-    `Transcript (channel #${segment.channelId}):\n${lines}`
+    `Channel: #${segment.channelId}\n${transcript}`
   );
 }
 
@@ -182,13 +201,14 @@ export function parseStatements(text: string): Statement[] {
 
 function toMemory(s: Statement, segment: TranscriptSegment, anchor: Turn): Memory {
   return {
-    // Deterministic per-statement id (same scheme as the heuristic
-    // extractor: anchored event + discriminator). Two things depend on it:
-    // id-keyed stores must not clobber sibling statements from one segment,
-    // and a segment retried after a partial failure must overwrite its
-    // already-stored statements instead of duplicating them.
+    // Deterministic CONTENT-derived id (bucket-scoped). Three things depend
+    // on it: id-keyed stores must not clobber sibling statements from one
+    // segment; a segment retried after a partial failure must overwrite its
+    // already-stored statements instead of duplicating them; and a statement
+    // the model re-extracts from overlap context in a later segment must
+    // land on the same id as the original, not create a duplicate.
     id: createHash("sha256")
-      .update(`${anchor.eventId}:${s.kind}:${s.content}`)
+      .update(`${segment.channelId}:${s.kind}:${s.content}`)
       .digest("hex")
       .slice(0, 16),
     kind: s.kind,

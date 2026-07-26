@@ -202,9 +202,36 @@ test("distillPrompt carries speaker-attributed turns and the channel", () => {
   const prompt = distillPrompt(
     segment([turn("alicepk0extra", "we decided to ship Friday")])
   );
-  assert.match(prompt, /channel #eng/);
+  assert.match(prompt, /Channel: #eng/);
   assert.match(prompt, /\[alicepk0\] we decided to ship Friday/);
   assert.match(prompt, /output exactly: NONE/);
+});
+
+test("distillPrompt separates already-captured overlap from new turns", () => {
+  const ctx = turn("alicepk0", "we decided to ship Friday");
+  const fresh = turn("bobpk000", "and I'll rotate the keys before that");
+  const prompt = distillPrompt(segment([ctx, fresh], [fresh]));
+  assert.match(prompt, /ALREADY captured — do NOT extract/);
+  // The context line appears before the new-conversation block; the fresh
+  // line after it.
+  const contextIdx = prompt.indexOf("we decided to ship Friday");
+  const newBlockIdx = prompt.indexOf("New conversation");
+  const freshIdx = prompt.indexOf("rotate the keys");
+  assert.ok(contextIdx < newBlockIdx && newBlockIdx < freshIdx);
+});
+
+test("a statement re-extracted from overlap context dedupes by content id", async () => {
+  const { LocalSiloStore } = await import("../src/silo/local.js");
+  const local = new LocalSiloStore();
+  const store = wrapWithNodeDistillation(local, fakeNode("decision: ship Friday"));
+  const decided = turn("alicepk0", "we decided to ship Friday");
+  await store.rememberTranscript!(segment([decided]));
+  assert.equal(local.size, 1);
+  // The next segment carries `decided` as overlap; a leaky model extracts
+  // the same statement again. Content-derived ids land it on the same entry.
+  const followUp = turn("bobpk000", "sounds good, moving on");
+  await store.rememberTranscript!(segment([decided, followUp], [followUp]));
+  assert.equal(local.size, 1); // no duplicate
 });
 
 test("DISTILL_MODE config parsing with out-of-the-box defaults", () => {

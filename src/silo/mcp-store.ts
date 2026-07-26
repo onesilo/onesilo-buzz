@@ -128,14 +128,23 @@ export class McpSiloStore implements MemoryStore {
   async rememberTranscript(segment: TranscriptSegment): Promise<RememberOutcome> {
     const first = segment.turns[0]!;
     const last = segment.turns[segment.turns.length - 1]!;
+    // Overlap turns were already captured by the previous segment; mark
+    // them so the server-side distiller treats them as reference context,
+    // not content to re-capture.
+    const freshIds = new Set(segment.fresh.map((t) => t.eventId));
     const lines = segment.turns
-      .map((t) => `[${t.authorPubkey.slice(0, 8)}] ${t.content}`)
+      .map(
+        (t) =>
+          `${freshIds.has(t.eventId) ? "" : "(context, already captured) "}` +
+          `[${t.authorPubkey.slice(0, 8)}] ${t.content}`
+      )
       .join("\n");
     const content =
       `Buzz conversation transcript (channel ${segment.channelId}):\n${lines}\n\n` +
       `[buzz transcript channel=${segment.channelId} ` +
       `events=${first.eventId.slice(0, 12)}..${last.eventId.slice(0, 12)} ` +
-      `from=${first.createdAt} to=${last.createdAt} turns=${segment.turns.length}]`;
+      `from=${first.createdAt} to=${last.createdAt} turns=${segment.turns.length} ` +
+      `context=${segment.turns.length - segment.fresh.length}]`;
     const { payload, isError } = await this.mcp.callTool("silo_remember", {
       silo_id: this.router.resolve(segment.channelId),
       content,
