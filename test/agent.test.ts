@@ -333,6 +333,40 @@ test("transcript-capable stores receive whole segments with context", async () =
   assert.match(segments[0]!.contents[2]!, /decided to ship it Friday/);
 });
 
+test("stop() drains queued events before the shutdown flush", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const segments: Array<{ reason: string; turns: number }> = [];
+  const transcriptStore: MemoryStore = {
+    remember: async () => ({ status: "queued" }),
+    rememberTranscript: async (segment) => {
+      segments.push({ reason: segment.reason, turns: segment.turns.length });
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, transcriptStore, identity);
+  await agent.start();
+  // Delivered but NOT settled: the handler is still queued when stop() runs.
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "just chatting about the offsite plans",
+      },
+      generateSecretKey()
+    )
+  );
+  await agent.stop();
+  assert.equal(segments.length, 1); // the queued turn made it into the final flush
+  assert.equal(segments[0]!.reason, "shutdown");
+  assert.equal(segments[0]!.turns, 1);
+});
+
 test("mention matching does not false-positive on longer handles", async () => {
   const { relay, say } = await setup();
   say("@silos are the best way to organize memory, honestly");

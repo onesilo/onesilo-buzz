@@ -67,7 +67,9 @@ export class TurnWindowManager {
   constructor(
     opts: Partial<WindowOptions>,
     /** Receives each segment; must not throw (handle/restore internally). */
-    private readonly onFlush: (segment: TranscriptSegment) => Promise<void>
+    private readonly onFlush: (segment: TranscriptSegment) => Promise<void>,
+    /** Clock (injectable for tests). */
+    private readonly now: () => number = Date.now
   ) {
     this.opts = { ...DEFAULT_WINDOW_OPTIONS, ...opts };
   }
@@ -80,7 +82,10 @@ export class TurnWindowManager {
     const buf = this.buffer(channelId);
     buf.turns.push(turn);
     buf.freshCount += 1;
-    buf.lastActivityMs = turn.createdAt * 1000;
+    // Idle is measured in observation (wall-clock) time, not the event's
+    // created_at: relay replays deliver backdated events that must not look
+    // instantly idle, and future-skewed clocks must not hold episodes open.
+    buf.lastActivityMs = this.now();
     if (salient) return this.flush(channelId, "salience");
     if (buf.freshCount >= this.opts.maxTurns) return this.flush(channelId, "size");
     return Promise.resolve();
@@ -103,14 +108,20 @@ export class TurnWindowManager {
   }
 
   /**
-   * Put failed-to-capture turns back at the head of the buffer so the next
-   * trigger retries them (capture failures must not lose the episode).
+   * Put a failed segment's fresh turns back so the next trigger retries
+   * them (capture failures must not lose the episode). The buffer at this
+   * point holds the overlap tail flush() retained — which duplicates the
+   * failed segment's own tail — plus any turns that arrived while the
+   * flush was in flight; rebuild it coherently instead of prepending:
+   * original context, then the failed fresh turns, then the new arrivals.
    */
-  restore(channelId: string, fresh: Turn[]): void {
-    if (fresh.length === 0) return;
-    const buf = this.buffer(channelId);
-    buf.turns = [...fresh, ...buf.turns];
-    buf.freshCount += fresh.length;
+  restore(segment: TranscriptSegment): void {
+    if (segment.fresh.length === 0) return;
+    const buf = this.buffer(segment.channelId);
+    const arrivedSince = buf.turns.slice(buf.turns.length - buf.freshCount);
+    const context = segment.turns.slice(0, segment.turns.length - segment.fresh.length);
+    buf.turns = [...context, ...segment.fresh, ...arrivedSince];
+    buf.freshCount += segment.fresh.length;
   }
 
   /** Fresh turns currently pending per channel (for tests/introspection). */

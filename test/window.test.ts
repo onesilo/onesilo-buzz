@@ -12,11 +12,18 @@ function turn(content: string, createdAt = 1_753_000_000 + seq): Turn {
   return { authorPubkey: `pk${seq}`, content, createdAt, eventId: `ev${seq}` };
 }
 
-function manager(opts: { maxTurns: number; overlapTurns: number; idleFlushMs: number }) {
+function manager(
+  opts: { maxTurns: number; overlapTurns: number; idleFlushMs: number },
+  now?: () => number
+) {
   const flushed: TranscriptSegment[] = [];
-  const m = new TurnWindowManager(opts, async (segment) => {
-    flushed.push(segment);
-  });
+  const m = new TurnWindowManager(
+    opts,
+    async (segment) => {
+      flushed.push(segment);
+    },
+    now
+  );
   return { m, flushed };
 }
 
@@ -50,16 +57,30 @@ test("a salient turn flushes immediately with its preceding context", async () =
 });
 
 test("idle flush closes an episode; overlap-only buffers stay put", async () => {
-  const { m, flushed } = manager({ maxTurns: 10, overlapTurns: 2, idleFlushMs: 5_000 });
+  const wallClock = 9_000_000_000_000; // deliberately unrelated to event time
+  const { m, flushed } = manager({ maxTurns: 10, overlapTurns: 2, idleFlushMs: 5_000 }, () => wallClock);
   const t = turn("some chatter about the offsite", 1_753_000_000);
   await m.push("eng", t, false);
-  await m.flushIdle(1_753_000_000 * 1000 + 1_000); // not idle yet
+  await m.flushIdle(wallClock + 1_000); // not idle yet
   assert.equal(flushed.length, 0);
-  await m.flushIdle(1_753_000_000 * 1000 + 6_000);
+  await m.flushIdle(wallClock + 6_000);
   assert.equal(flushed.length, 1);
   assert.equal(flushed[0]!.reason, "idle");
   // The retained overlap has no fresh turns — idle must not re-flush it.
-  await m.flushIdle(1_753_000_000 * 1000 + 60_000);
+  await m.flushIdle(wallClock + 60_000);
+  assert.equal(flushed.length, 1);
+});
+
+test("idle uses observation time, not the event's created_at", async () => {
+  const wallClock = 9_000_000_000_000;
+  const { m, flushed } = manager({ maxTurns: 10, overlapTurns: 0, idleFlushMs: 5_000 }, () => wallClock);
+  // A replayed event backdated far into the past must not look instantly idle.
+  await m.push("eng", turn("replayed history line", 1_000), false);
+  await m.flushIdle(wallClock + 1_000);
+  assert.equal(flushed.length, 0);
+  // And a future-skewed created_at must not hold the episode open.
+  await m.push("eng", turn("future-skewed line", 9_999_999_999), false);
+  await m.flushIdle(wallClock + 6_000);
   assert.equal(flushed.length, 1);
 });
 
@@ -71,7 +92,7 @@ test("restore puts failed turns back for the next flush", async () => {
     async (segment) => {
       if (failFirst) {
         failFirst = false;
-        m.restore(segment.channelId, segment.fresh);
+        m.restore(segment);
         return;
       }
       flushed.push(segment);
@@ -83,6 +104,65 @@ test("restore puts failed turns back for the next flush", async () => {
   assert.equal(flushed.length, 1);
   assert.equal(flushed[0]!.fresh.length, 2);
   assert.equal(m.pending("eng"), 0);
+});
+
+test("restore with overlap does not duplicate or reorder turns", async () => {
+  const flushed: TranscriptSegment[] = [];
+  let fail = false;
+  const m = new TurnWindowManager(
+    { maxTurns: 3, overlapTurns: 1, idleFlushMs: 60_000 },
+    async (segment) => {
+      if (fail) {
+        fail = false;
+        m.restore(segment);
+        return;
+      }
+      flushed.push(segment);
+    }
+  );
+  // A successful flush leaves "c" behind as overlap context.
+  await m.push("eng", turn("a"), false);
+  await m.push("eng", turn("b"), false);
+  await m.push("eng", turn("c"), false); // size flush, succeeds
+  assert.equal(flushed.length, 1);
+
+  fail = true;
+  await m.push("eng", turn("d"), true); // salience flush [c, d] fails, restored
+  assert.equal(m.pending("eng"), 1);
+  await m.push("eng", turn("e"), true); // retry flush
+
+  assert.equal(flushed.length, 2);
+  const retried = flushed[1]!;
+  assert.deepEqual(retried.turns.map((t) => t.content), ["c", "d", "e"]);
+  assert.deepEqual(retried.fresh.map((t) => t.content), ["d", "e"]);
+  const ids = retried.turns.map((t) => t.eventId);
+  assert.equal(new Set(ids).size, ids.length, "no duplicated turns after restore");
+});
+
+test("restore keeps turns that arrived while the failed flush was in flight", async () => {
+  const flushed: TranscriptSegment[] = [];
+  let failNext = true;
+  const m = new TurnWindowManager(
+    { maxTurns: 10, overlapTurns: 1, idleFlushMs: 60_000 },
+    async (segment) => {
+      if (failNext) {
+        failNext = false;
+        // A turn lands while the capture is in flight.
+        void m.push(segment.channelId, turn("arrived mid-flight"), false);
+        m.restore(segment);
+        return;
+      }
+      flushed.push(segment);
+    }
+  );
+  await m.push("eng", turn("we decided to ship Friday"), true); // fails
+  assert.equal(m.pending("eng"), 2);
+  await m.flushAll();
+  assert.equal(flushed.length, 1);
+  assert.deepEqual(
+    flushed[0]!.turns.map((t) => t.content),
+    ["we decided to ship Friday", "arrived mid-flight"]
+  );
 });
 
 test("flushAll drains every channel on shutdown", async () => {

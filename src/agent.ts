@@ -113,7 +113,11 @@ export class SiloMemoryAgent {
   /** Flush pending conversation buffers and stop timers (shutdown path). */
   async stop(): Promise<void> {
     if (this.idleTimer) clearInterval(this.idleTimer);
-    await this.window.flushAll();
+    // Drain queued event handling before the final flush: turns still in
+    // the queue at shutdown must land in the buffers first, and a flush
+    // must never interleave with an in-flight handler.
+    this.queue = this.queue.then(() => this.window.flushAll());
+    await this.queue;
   }
 
   async handleEvent(event: NostrEvent): Promise<void> {
@@ -181,7 +185,7 @@ export class SiloMemoryAgent {
         }
       }
     } catch (err) {
-      this.window.restore(segment.channelId, segment.fresh);
+      this.window.restore(segment);
       this.log(
         `segment capture failed #${segment.channelId} (${segment.fresh.length} turns retained for retry): ${err}`
       );
