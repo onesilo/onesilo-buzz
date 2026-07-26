@@ -91,13 +91,16 @@ function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`${signal} received — flushing pending captures`);
+  // Stop intake FIRST: events delivered during the final flush would land
+  // in the window after it and be dropped silently on exit. Closing the
+  // relay before stop() means already-queued command replies may fail
+  // delivery (logged, capture still happens) — during shutdown, capture
+  // integrity outranks replies.
+  relay.close();
   void agent
     .stop()
     .catch((err) => console.error("shutdown flush failed:", err))
-    .finally(() => {
-      relay.close();
-      process.exit(0);
-    });
+    .finally(() => process.exit(0));
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
