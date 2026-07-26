@@ -82,7 +82,7 @@ The agent's real memory is a **silo** — a private, managed memory store
 powered by One Silo, with semantic recall, entity/topic enrichment, and an
 owner dashboard. Your
 memory stays portable: silos export to the open `.silo` file format, specified
-at [onesilo/onesilo-spec](https://github.com/onesilo/onesilo-spec).
+at [onesilo/silo-spec](https://github.com/onesilo/silo-spec).
 
 **Sign up at [dashboard.onesilo.com](https://dashboard.onesilo.com/)** —
 free to start. That's the only dashboard step: the agent registers itself
@@ -227,7 +227,7 @@ Memory lives in **silos**, and one agent isn't limited to one:
   different workspaces, different machines, different keypairs — at the
   same silo id and they read and write one shared memory, each still
   individually visible, rate-limitable, and revocable in the dashboard.
-- **Scope-aware startup.** On boot the agent calls `silo_get_scope`, logs
+- **Scope-aware startup.** On boot the agent calls `get_scope`, logs
   the silos and shapes its connection can reach, and warns about any
   configured bucket the connection hasn't been granted — so a
   misconfigured map fails loudly at startup, not silently at capture time.
@@ -295,5 +295,5 @@ integration and is not affiliated with or endorsed by Block.*
 ## License
 
 [Apache-2.0](LICENSE) — the same license as Buzz itself. See also
-[onesilo/onesilo-spec](https://github.com/onesilo/onesilo-spec), the open
+[onesilo/silo-spec](https://github.com/onesilo/silo-spec), the open
 specification for the exportable `.silo` format.

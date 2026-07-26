@@ -107,6 +107,43 @@ test("rememberTranscript sends a speaker-attributed transcript to the channel's 
   assert.match(content, /\[buzz transcript channel=eng .* from=100 to=160 turns=2 context=1\]/);
 });
 
+test("recall parses the real mini-silo envelope (context.memories)", async () => {
+  // The verified backend shape: memories nested under `context`.
+  const { client } = fakeMcp(() => ({
+    payload: {
+      query: "ship date",
+      silo_id: "uuid-1",
+      context: {
+        memories: [
+          { id: "m1", type: "custom", content: trailered("eng", "we decided to ship Friday"), score: 0.87 },
+        ],
+        connected_entities: [],
+        topics: [],
+        refs: [],
+      },
+    },
+    isError: false,
+  }));
+  const results = await new McpSiloStore(client).recall({ text: "ship date", limit: 3 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0]!.memory.content, "we decided to ship Friday");
+  assert.equal(results[0]!.score, 0.87);
+});
+
+test("forget parses the real forgotten response (deleted_memory_ids)", async () => {
+  const { client } = fakeMcp(() => ({
+    payload: {
+      status: "forgotten",
+      silo_id: "uuid-1",
+      deleted_count: 1,
+      deleted_memory_ids: ["m1"],
+      not_found_ids: [],
+    },
+    isError: false,
+  }));
+  assert.equal(await new McpSiloStore(client).forget("m1"), true);
+});
+
 test("recall maps silo_recall hits and recovers provenance from the trailer", async () => {
   const { client, calls } = fakeMcp(() => ({
     payload: {
@@ -183,7 +220,7 @@ test("init logs scope and warns on buckets outside the connection's grants", asy
   const logs: string[] = [];
   const router = SiloBucketRouter.fromEnv("default", "eng=silo-known,ops=silo-unknown");
   const { client } = fakeMcp((name) =>
-    name === "silo_get_scope"
+    name === "get_scope"
       ? {
           payload: {
             silos: [

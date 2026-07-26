@@ -92,7 +92,7 @@ export interface MemoryStore {
   overview?(channelId?: string): Promise<string>;
   /**
    * Optional startup hook: discover what the connection can reach
-   * (silo_get_scope — silos, granted shapes) and validate configuration.
+   * (get_scope — silos, granted shapes) and validate configuration.
    */
   init?(): Promise<void>;
   /**
