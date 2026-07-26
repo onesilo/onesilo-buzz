@@ -44,6 +44,8 @@ interface RecallHit {
 interface ScopeSilo {
   id?: string;
   silo_id?: string;
+  /** get_scope names this field `name`; older shapes used `title`. */
+  name?: string;
   title?: string;
   is_default?: boolean;
 }
@@ -81,7 +83,7 @@ export class McpSiloStore implements MemoryStore {
       .filter(Boolean);
     this.log(
       `scope: ${silos.length} silo(s) [${silos
-        .map((s) => `${s.title ?? s.id}${s.is_default ? "*" : ""}`)
+        .map((s) => `${s.name ?? s.title ?? s.id}${s.is_default ? "*" : ""}`)
         .join(", ")}], shapes: ${shapes.join(", ") || "(none reported)"}`
     );
     for (const bucket of this.router.buckets) {
@@ -165,7 +167,14 @@ export class McpSiloStore implements MemoryStore {
       max_results: Math.min(25, limit),
     });
     if (isError) throw new Error(`silo_recall failed: ${describe(payload)}`);
-    const hits = ((payload as { memories?: RecallHit[] })?.memories ?? []).filter(
+    // Memory-scope recall returns a mini-silo envelope with the matched
+    // memories under `context.memories`; tolerate a flat `memories` list
+    // too (the silo_search_memories shape).
+    const body = (payload ?? {}) as {
+      context?: { memories?: RecallHit[] };
+      memories?: RecallHit[];
+    };
+    const hits = (body.context?.memories ?? body.memories ?? []).filter(
       (h) => typeof h?.content === "string"
     );
     return hits.slice(0, limit).map((h) => ({ memory: toMemory(h), score: h.score ?? 0 }));
@@ -224,8 +233,15 @@ export class McpSiloStore implements MemoryStore {
     // apologizes instead of claiming the id doesn't exist.
     if (isError) throw new Error(`silo_forget failed: ${describe(payload)}`);
     // Only report success on confirmed deletion — an unexpected payload
-    // shape must not read as "forgotten".
-    const deleted = (payload as { deleted?: unknown[] })?.deleted;
+    // shape must not read as "forgotten". The real response is
+    // {status: "forgotten", deleted_memory_ids: [...]}; tolerate the older
+    // {deleted: [...]} shape too.
+    const body = (payload ?? {}) as {
+      status?: string;
+      deleted_memory_ids?: unknown[];
+      deleted?: unknown[];
+    };
+    const deleted = body.deleted_memory_ids ?? body.deleted;
     return Array.isArray(deleted) && deleted.length > 0;
   }
 
