@@ -49,6 +49,38 @@ function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+const OAUTH_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Verify a discovered OAuth endpoint shares the issuer's origin and is
+ * https (loopback http tolerated for local dev). Throws on mismatch so
+ * credentials are never sent to an endpoint the issuer didn't vouch for.
+ * Exported for tests.
+ */
+export function assertSameSecureOrigin(name: string, issuer: string, endpoint: string): void {
+  let iu: URL;
+  let eu: URL;
+  try {
+    iu = new URL(issuer);
+  } catch {
+    throw new Error(`OAuth issuer URL is invalid: ${issuer}`);
+  }
+  try {
+    eu = new URL(endpoint);
+  } catch {
+    throw new Error(`OAuth ${name} is not a valid URL: ${endpoint}`);
+  }
+  const loopback = OAUTH_LOOPBACK_HOSTS.has(iu.hostname);
+  if (eu.protocol !== "https:" && !(loopback && eu.protocol === "http:")) {
+    throw new Error(`OAuth ${name} must be https: ${endpoint}`);
+  }
+  if (eu.origin !== iu.origin) {
+    throw new Error(
+      `OAuth ${name} (${eu.origin}) is not same-origin as the issuer (${iu.origin})`
+    );
+  }
+}
+
 export class SiloOAuthClient {
   private creds?: StoredCredentials;
   private metadata?: ServerMetadata;
@@ -81,7 +113,20 @@ export class SiloOAuthClient {
     if (this.metadata) return this.metadata;
     const res = await fetch(`${this.config.serverUrl}/.well-known/oauth-authorization-server`);
     if (!res.ok) throw new Error(`OAuth discovery failed: ${res.status}`);
-    this.metadata = (await res.json()) as ServerMetadata;
+    const meta = (await res.json()) as ServerMetadata;
+    // Pin the discovered endpoints to the issuer's origin (RFC 8414 §3.3).
+    // Without this, a hostile or MITM'd discovery document could point
+    // token_endpoint at an attacker host — we'd then send the auth code +
+    // PKCE verifier + client secret there, and on every refresh the refresh
+    // token too. Require https and same-origin (loopback http for dev).
+    for (const [name, ep] of Object.entries({
+      authorization_endpoint: meta.authorization_endpoint,
+      token_endpoint: meta.token_endpoint,
+      registration_endpoint: meta.registration_endpoint,
+    })) {
+      assertSameSecureOrigin(name, this.config.serverUrl, ep);
+    }
+    this.metadata = meta;
     return this.metadata;
   }
 

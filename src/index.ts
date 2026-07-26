@@ -6,6 +6,8 @@
  * walkthrough, run `npm run demo` instead.
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { loadConfig } from "./config.js";
 import { loadIdentity, exportSecretKeyHex } from "./buzz/identity.js";
 import { WebSocketRelay } from "./buzz/relay.js";
@@ -25,9 +27,33 @@ const log = (line: string) => console.log(`[silo-memory] ${line}`);
 const config = loadConfig();
 const identity = loadIdentity(config.agentHandle, config.agentSecretKeyHex);
 if (!config.agentSecretKeyHex) {
-  console.log(
-    `Generated a new agent keypair. To keep this identity, set AGENT_SECRET_KEY=${exportSecretKeyHex(identity)}`
-  );
+  // A freshly generated key is the agent's signing identity — a genuine
+  // secret. Never print it to stdout, where it would be captured by log
+  // aggregators/CI logs indefinitely. Persist it to a 0600 file and log
+  // only the path (+ the public key, which is not sensitive).
+  const keyPath = process.env.AGENT_SECRET_KEY_PATH ?? ".silo/agent.key";
+  try {
+    mkdirSync(dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, `${exportSecretKeyHex(identity)}\n`, { mode: 0o600 });
+    log(
+      `Generated a new agent identity (pubkey ${identity.pubkey.slice(0, 12)}…). ` +
+        `Wrote its secret key to ${keyPath} (0600). Keep that file, or set ` +
+        `AGENT_SECRET_KEY from it, to preserve this identity.`
+    );
+  } catch (err) {
+    // Couldn't persist it. Only reveal on an interactive terminal, so the
+    // key still never lands in piped/aggregated logs.
+    if (process.stdout.isTTY) {
+      console.log(
+        `Generated a new agent keypair. To keep this identity, set AGENT_SECRET_KEY=${exportSecretKeyHex(identity)}`
+      );
+    } else {
+      log(
+        `Generated a new agent identity but could not persist it (${err}). Set ` +
+          `AGENT_SECRET_KEY or AGENT_SECRET_KEY_PATH to keep a stable identity.`
+      );
+    }
+  }
 }
 
 // Node key for the LAN APIs (memory, cloud relay): env/file first; if
