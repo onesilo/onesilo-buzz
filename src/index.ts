@@ -14,6 +14,8 @@ import { SiloOAuthClient } from "./silo/oauth.js";
 import { McpClient } from "./silo/mcp-client.js";
 import { McpSiloStore } from "./silo/mcp-store.js";
 import { SiloBucketRouter } from "./silo/buckets.js";
+import { wrapWithNodeDistillation } from "./silo/node-distill.js";
+import { SiloNodeClient, resolveNodeAdminToken } from "./node/client.js";
 import { SiloMemoryAgent } from "./agent.js";
 import type { MemoryStore } from "./silo/types.js";
 
@@ -50,6 +52,16 @@ if (config.silo.mode === "mcp") {
   store = new McpSiloStore(mcp, router, log);
 } else {
   store = new LocalSiloStore(config.silo.path);
+}
+
+// DISTILL_MODE=node: distill transcripts on a local silo-node so raw
+// conversation never leaves this machine — only distilled statements sync.
+if (config.distill.mode === "node") {
+  const node = new SiloNodeClient(
+    config.distill.url,
+    resolveNodeAdminToken(config.distill.adminToken)
+  );
+  store = wrapWithNodeDistillation(store, node, log);
 }
 
 const relay = new WebSocketRelay(config.relayUrl, identity, log);

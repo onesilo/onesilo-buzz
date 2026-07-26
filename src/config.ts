@@ -11,6 +11,20 @@ export interface Config {
     overlapTurns: number;
     idleFlushMs: number;
   };
+  /**
+   * Where transcript distillation happens. "cloud": segments go to the silo
+   * raw and One Silo's pipeline distills them. "node": a local silo-node
+   * distills first and only distilled statements leave the machine.
+   */
+  distill:
+    | { mode: "cloud" }
+    | {
+        mode: "node";
+        /** silo-node admin API origin. */
+        url: string;
+        /** Explicit admin token; empty = read ~/.silo-node/admin.token. */
+        adminToken?: string;
+      };
   silo:
     | { mode: "local"; path: string }
     | {
@@ -41,6 +55,14 @@ export function loadConfig(env = process.env): Config {
       overlapTurns: parseCount(env.CAPTURE_OVERLAP_TURNS, 2, 0),
       idleFlushMs: parseCount(env.CAPTURE_IDLE_FLUSH_SECONDS, 600) * 1000,
     },
+    distill:
+      env.DISTILL_MODE === "node"
+        ? {
+            mode: "node",
+            url: env.NODE_URL ?? "http://127.0.0.1:8766",
+            adminToken: env.NODE_ADMIN_TOKEN,
+          }
+        : { mode: "cloud" },
     silo:
       mode === "mcp"
         ? {
