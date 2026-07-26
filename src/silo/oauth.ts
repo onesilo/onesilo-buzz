@@ -100,7 +100,15 @@ export function assertSameSecureOrigin(name: string, issuer: string, endpoint: s
   if (eu.protocol !== "https:" && !(loopback && eu.protocol === "http:")) {
     throw new Error(`OAuth ${name} must be https: ${endpoint}`);
   }
-  if (eu.origin !== iu.origin) {
+  // Same-origin, but treat loopback aliases (localhost / 127.0.0.1 / ::1) as
+  // equivalent when scheme+port match, so local dev doesn't fail just
+  // because the issuer and discovery doc spell loopback differently.
+  const loopbackAliased =
+    loopback &&
+    OAUTH_LOOPBACK_HOSTS.has(eu.hostname) &&
+    eu.protocol === iu.protocol &&
+    eu.port === iu.port;
+  if (eu.origin !== iu.origin && !loopbackAliased) {
     throw new Error(
       `OAuth ${name} (${eu.origin}) is not same-origin as the issuer (${iu.origin})`
     );
@@ -135,8 +143,13 @@ export class SiloOAuthClient {
     writeFileSync(this.config.tokenPath, JSON.stringify(this.creds, null, 2), { mode: 0o600 });
     // writeFileSync's mode is ignored when the file already exists (every
     // token refresh overwrites), so enforce 0600 explicitly — this file
-    // holds the refresh token.
-    chmodSync(this.config.tokenPath, 0o600);
+    // holds the refresh token. Best-effort: a chmod failure must not break
+    // token persistence (the content is already written).
+    try {
+      chmodSync(this.config.tokenPath, 0o600);
+    } catch {
+      /* best effort */
+    }
   }
 
   private async discover(): Promise<ServerMetadata> {

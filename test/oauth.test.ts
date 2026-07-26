@@ -34,6 +34,28 @@ test("tolerates loopback http for a loopback issuer (dev)", () => {
   );
 });
 
+test("treats localhost and 127.0.0.1 as equivalent loopback origins", () => {
+  assert.doesNotThrow(() =>
+    assertSameSecureOrigin(
+      "token_endpoint",
+      "http://localhost:8000",
+      "http://127.0.0.1:8000/oauth/token"
+    )
+  );
+});
+
+test("loopback aliasing still requires a matching port", () => {
+  assert.throws(
+    () =>
+      assertSameSecureOrigin(
+        "token_endpoint",
+        "http://localhost:8000",
+        "http://127.0.0.1:9000/oauth/token"
+      ),
+    /not same-origin/
+  );
+});
+
 test("rejects a different port as cross-origin", () => {
   assert.throws(
     () => assertSameSecureOrigin("token_endpoint", ISSUER, "https://api.onesilo.com:9999/token"),

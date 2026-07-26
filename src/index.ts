@@ -38,22 +38,32 @@ if (resolvedSecret.fromFile) {
   // A freshly generated key is the agent's signing identity — a genuine
   // secret. Never print it to stdout, where it would be captured by log
   // aggregators/CI logs indefinitely. Persist it to a 0600 file and log
-  // only the path (+ the public key, which is not sensitive).
+  // only the path (+ the public key, which is not sensitive). resolve only
+  // returns undefined when no key file exists, so this always creates a new
+  // file — writeFileSync's mode applies (it's only ignored on existing
+  // files) and we never clobber an existing key.
+  let persisted = false;
   try {
     mkdirSync(dirname(keyPath), { recursive: true });
     writeFileSync(keyPath, `${exportSecretKeyHex(identity)}\n`, { mode: 0o600 });
-    // writeFileSync's mode is ignored when the file already exists, so
-    // enforce 0600 explicitly — this is a secret key.
-    chmodSync(keyPath, 0o600);
+    persisted = true;
+    // Best-effort tighten (in case of an unusual umask/pre-existing inode);
+    // a chmod failure must NOT drop us into the reveal path — the key is
+    // already safely on disk.
+    try {
+      chmodSync(keyPath, 0o600);
+    } catch {
+      /* best effort */
+    }
     log(
       `Generated a new agent identity (pubkey ${identity.pubkey.slice(0, 12)}…). ` +
         `Wrote its secret key to ${keyPath} (0600); it will be loaded automatically ` +
         `on the next start. Keep that file to preserve this identity.`
     );
   } catch (err) {
-    // Couldn't persist it. Only reveal on an interactive terminal, so the
-    // key still never lands in piped/aggregated logs.
-    if (process.stdout.isTTY) {
+    // The write itself failed — the key is not on disk. Only reveal it on an
+    // interactive terminal, so it still never lands in piped/aggregated logs.
+    if (!persisted && process.stdout.isTTY) {
       console.log(
         `Generated a new agent keypair. To keep this identity, set AGENT_SECRET_KEY=${exportSecretKeyHex(identity)}`
       );

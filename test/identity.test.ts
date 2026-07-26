@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAgentSecretKeyHex } from "../src/buzz/identity.js";
@@ -32,10 +32,22 @@ test("no env and no file → undefined (caller generates + persists)", () => {
   assert.equal(r.fromFile, false);
 });
 
-test("a corrupt key file is ignored (regenerate rather than crash)", () => {
+test("an existing but invalid key file throws (never silently overwritten)", () => {
   const dir = mkdtempSync(join(tmpdir(), "id-"));
   const path = join(dir, "agent.key");
   writeFileSync(path, "not-a-valid-hex-key");
-  const r = resolveAgentSecretKeyHex(undefined, path);
-  assert.equal(r.hex, undefined);
+  assert.throws(() => resolveAgentSecretKeyHex(undefined, path), /not a valid 64-char hex key/);
+});
+
+test("an unreadable key file throws rather than being overwritten", () => {
+  // A directory at the key path makes readFileSync fail (EISDIR), standing
+  // in for a permission failure — the resolver must throw, not regenerate.
+  const dir = mkdtempSync(join(tmpdir(), "id-"));
+  const path = join(dir, "agent.key");
+  mkdirSync(path);
+  assert.throws(() => resolveAgentSecretKeyHex(undefined, path), /Cannot read agent key file/);
+});
+
+test("a malformed AGENT_SECRET_KEY env throws a clear error", () => {
+  assert.throws(() => resolveAgentSecretKeyHex("too-short", "/nonexistent"), /64 hex characters/);
 });
