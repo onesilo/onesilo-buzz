@@ -234,23 +234,31 @@ test("a statement re-extracted from overlap context dedupes by content id", asyn
   assert.equal(local.size, 1); // no duplicate
 });
 
-test("DISTILL_MODE config parsing with out-of-the-box defaults", () => {
-  const cloud = loadConfig({});
-  assert.deepEqual(cloud.distill, { mode: "cloud" });
-  const node = loadConfig({ DISTILL_MODE: "node" });
-  assert.deepEqual(node.distill, {
-    mode: "node",
-    url: "http://127.0.0.1:8766",
+test("node/distill/silo-mode config parsing with out-of-the-box defaults", () => {
+  const defaults = loadConfig({});
+  assert.equal(defaults.distill, "cloud");
+  assert.equal(defaults.silo.mode, "mcp");
+  assert.deepEqual(defaults.node, {
+    adminUrl: "http://127.0.0.1:8766",
     adminToken: undefined,
+    lanUrl: "http://127.0.0.1:8765",
+    key: undefined,
   });
-  const custom = loadConfig({
-    DISTILL_MODE: "node",
-    NODE_URL: "http://127.0.0.1:9999",
-    NODE_ADMIN_TOKEN: "tok",
+
+  assert.equal(loadConfig({ DISTILL_MODE: "node" }).distill, "node");
+
+  const relay = loadConfig({ SILO_MODE: "relay", SILO_ID: "shared-silo" });
+  assert.deepEqual(relay.silo, { mode: "relay", siloId: "shared-silo", channelMap: "" });
+
+  const node = loadConfig({
+    SILO_MODE: "node",
+    NODE_LAN_URL: "http://127.0.0.1:9999",
+    NODE_KEY: "k",
   });
-  assert.deepEqual(custom.distill, {
-    mode: "node",
-    url: "http://127.0.0.1:9999",
-    adminToken: "tok",
-  });
+  assert.deepEqual(node.silo, { mode: "node", siloId: "default", channelMap: "" });
+  assert.equal(node.node.lanUrl, "http://127.0.0.1:9999");
+  assert.equal(node.node.key, "k");
+
+  // Unknown modes fall back to mcp instead of crashing.
+  assert.equal(loadConfig({ SILO_MODE: "banana" }).silo.mode, "mcp");
 });

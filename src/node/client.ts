@@ -35,6 +35,9 @@ export interface NodeGenerateResult {
 /** Where `silo-node setup` persists the admin token. */
 export const DEFAULT_NODE_TOKEN_PATH = join(homedir(), ".silo-node", "admin.token");
 
+/** Where the node generates its memory/relay API key on first start. */
+export const DEFAULT_NODE_KEY_PATH = join(homedir(), ".silo-node", "node.key");
+
 /**
  * Resolve the node admin token: explicit env value first, then the token
  * file the setup wizard writes. "" when neither exists (calls will 401
@@ -47,6 +50,24 @@ export function resolveNodeAdminToken(
   if (explicit && explicit.trim()) return explicit.trim();
   try {
     return readFileSync(tokenPath, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Resolve the node key (X-Silo-Node-Key, authenticates the node's LAN APIs:
+ * memory and the cloud relay): explicit env value first, then the key file
+ * the node writes on first start. "" when neither exists — callers may then
+ * fall back to reading it from the admin API (SiloNodeClient.nodeKey).
+ */
+export function resolveNodeKey(
+  explicit: string | undefined,
+  keyPath: string = DEFAULT_NODE_KEY_PATH
+): string {
+  if (explicit && explicit.trim()) return explicit.trim();
+  try {
+    return readFileSync(keyPath, "utf8").trim();
   } catch {
     return "";
   }
@@ -76,6 +97,23 @@ export class SiloNodeClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The node key from admin GET /v1/status (the documented way to read it).
+   * Fallback for when ~/.silo-node/node.key isn't readable directly.
+   */
+  async nodeKey(): Promise<string> {
+    const res = await this.fetch(
+      "/v1/status",
+      { method: "GET", headers: { Authorization: `Bearer ${this.adminToken}` } },
+      5_000
+    );
+    if (!res.ok) {
+      throw new Error(`silo-node status failed (${res.status}): ${await errorDetail(res)}`);
+    }
+    const body = (await res.json()) as { node_key?: string };
+    return body.node_key ?? "";
   }
 
   /** One-shot completion on the node's local model. */
