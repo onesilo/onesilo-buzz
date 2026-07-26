@@ -45,8 +45,14 @@ export interface AgentOptions {
   names?: Map<string, string>;
   /** Conversation-capture tuning: window size, overlap, idle flush. */
   capture?: Partial<WindowOptions>;
+  /** Pause between shutdown flush retries (test seam). */
+  shutdownRetryMs?: number;
   log?: (line: string) => void;
 }
+
+/** Shutdown flush retry budget: attempts and pacing. */
+const SHUTDOWN_FLUSH_ATTEMPTS = 3;
+const SHUTDOWN_FLUSH_RETRY_MS = 2_000;
 
 const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/i;
 
@@ -116,8 +122,30 @@ export class SiloMemoryAgent {
     // Drain queued event handling before the final flush: turns still in
     // the queue at shutdown must land in the buffers first, and a flush
     // must never interleave with an in-flight handler.
-    this.queue = this.queue.then(() => this.window.flushAll());
+    this.queue = this.queue.then(() => this.finalFlush());
     await this.queue;
+  }
+
+  /**
+   * Shutdown flush with bounded retry: a transient silo error at exit
+   * restores turns to the window, and without a retry they'd be silently
+   * lost when the process exits. After the last attempt, say exactly what
+   * is being dropped instead of pretending the flush succeeded.
+   */
+  private async finalFlush(): Promise<void> {
+    const attempts = SHUTDOWN_FLUSH_ATTEMPTS;
+    const retryMs = this.options.shutdownRetryMs ?? SHUTDOWN_FLUSH_RETRY_MS;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      await this.window.flushAll();
+      const left = this.window.pendingTotal();
+      if (left === 0) return;
+      if (attempt < attempts) {
+        this.log(`shutdown flush left ${left} turns pending; retrying in ${retryMs}ms`);
+        await new Promise((r) => setTimeout(r, retryMs));
+      } else {
+        this.log(`shutdown: dropping ${left} uncaptured turns after ${attempts} flush attempts`);
+      }
+    }
   }
 
   async handleEvent(event: NostrEvent): Promise<void> {

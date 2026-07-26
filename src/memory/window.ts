@@ -129,6 +129,13 @@ export class TurnWindowManager {
     return this.buffers.get(channelId)?.freshCount ?? 0;
   }
 
+  /** Total fresh turns pending across all channels. */
+  pendingTotal(): number {
+    let total = 0;
+    for (const buf of this.buffers.values()) total += buf.freshCount;
+    return total;
+  }
+
   private buffer(channelId: string): ChannelBuffer {
     let buf = this.buffers.get(channelId);
     if (!buf) {

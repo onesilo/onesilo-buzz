@@ -367,6 +367,75 @@ test("stop() drains queued events before the shutdown flush", async () => {
   assert.equal(segments[0]!.turns, 1);
 });
 
+test("shutdown flush retries a transient silo error instead of dropping turns", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  let failures = 2;
+  const captured: string[] = [];
+  const flaky: MemoryStore = {
+    remember: async (m) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("transient silo outage");
+      }
+      captured.push(m.content);
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, flaky, identity, { shutdownRetryMs: 1 });
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "we decided to postpone the launch to Monday",
+      },
+      generateSecretKey()
+    )
+  );
+  // The salient in-queue flush fails once; stop()'s retries land it.
+  await agent.stop();
+  assert.equal(captured.length, 1);
+  assert.match(captured[0]!, /postpone the launch/);
+});
+
+test("shutdown names dropped turns when the silo stays down", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  const dead: MemoryStore = {
+    remember: async () => {
+      throw new Error("silo hard down");
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, dead, identity, {
+    shutdownRetryMs: 1,
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "we decided to sunset the beta program",
+      },
+      generateSecretKey()
+    )
+  );
+  await agent.stop();
+  assert.match(logs.join("\n"), /dropping 1 uncaptured turn/);
+});
+
 test("mention matching does not false-positive on longer handles", async () => {
   const { relay, say } = await setup();
   say("@silos are the best way to organize memory, honestly");
