@@ -183,7 +183,7 @@ test("init logs scope and warns on buckets outside the connection's grants", asy
   const logs: string[] = [];
   const router = SiloBucketRouter.fromEnv("default", "eng=silo-known,ops=silo-unknown");
   const { client } = fakeMcp((name) =>
-    name === "silo_get_scope"
+    name === "get_scope"
       ? {
           payload: {
             silos: [

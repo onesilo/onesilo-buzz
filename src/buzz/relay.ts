@@ -59,7 +59,7 @@ export class WebSocketRelay implements BuzzRelay {
   /**
    * Live-tail floor, stamped at construction rather than subscribe time:
    * startup work between construction and the first REQ (OAuth checks,
-   * silo_get_scope) must not open a gap of missed messages.
+   * get_scope) must not open a gap of missed messages.
    */
   private readonly sinceFloor = Math.floor(Date.now() / 1000);
 

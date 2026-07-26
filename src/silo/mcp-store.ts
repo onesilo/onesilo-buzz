@@ -3,7 +3,7 @@
  * the agent is a standard MCP client (see mcp-client.ts / oauth.ts), so this
  * store uses only tools every other MCP client already uses:
  *
- *   silo_get_scope       discovery: silos + granted shapes this connection
+ *   get_scope       discovery: silos + granted shapes this connection
  *                        can reach (run once at startup via init())
  *   silo_remember        capture (async ingestion + enrichment pipeline)
  *   silo_recall          Pinecone-backed semantic recall (scored memories)
@@ -56,15 +56,15 @@ export class McpSiloStore implements MemoryStore {
   ) {}
 
   /**
-   * Discover what this connection can reach (silo_get_scope) and sanity-
+   * Discover what this connection can reach (get_scope) and sanity-
    * check the bucket configuration against it. Non-fatal: an unknown bucket
    * is logged loudly but the agent still starts (grants may be added from
    * the dashboard afterwards).
    */
   async init(): Promise<void> {
-    const { payload, isError } = await this.mcp.callTool("silo_get_scope", {});
+    const { payload, isError } = await this.mcp.callTool("get_scope", {});
     if (isError) {
-      this.log(`silo_get_scope failed (continuing): ${describe(payload)}`);
+      this.log(`get_scope failed (continuing): ${describe(payload)}`);
       return;
     }
     const scope = (payload ?? {}) as {
