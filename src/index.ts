@@ -83,8 +83,14 @@ main().catch((err) => {
   process.exit(1);
 });
 
-process.on("SIGINT", () => {
-  // Flush pending conversation buffers before going down, then close.
+// Graceful shutdown on both Ctrl-C and supervisor stops (Docker/Kubernetes/
+// systemd send SIGTERM): flush pending conversation buffers, then close.
+// A second signal during the flush must not restart it.
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`${signal} received — flushing pending captures`);
   void agent
     .stop()
     .catch((err) => console.error("shutdown flush failed:", err))
@@ -92,4 +98,6 @@ process.on("SIGINT", () => {
       relay.close();
       process.exit(0);
     });
-});
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
