@@ -16,7 +16,7 @@
 
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface OAuthConfig {
@@ -49,6 +49,72 @@ function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * Pin the discovered endpoints to the issuer's origin (RFC 8414 §3.3).
+ * Without this, a hostile or MITM'd discovery document could point
+ * token_endpoint at an attacker host — we'd then send the auth code + PKCE
+ * verifier + client secret there, and on every refresh the refresh token
+ * too. `registration_endpoint` is optional in RFC 8414, so only present
+ * endpoints are checked; a required-but-absent endpoint fails naturally in
+ * the code path that needs it. Exported for tests.
+ */
+export function validateDiscoveredEndpoints(
+  issuer: string,
+  meta: {
+    authorization_endpoint?: string;
+    token_endpoint?: string;
+    registration_endpoint?: string;
+  }
+): void {
+  for (const [name, ep] of Object.entries({
+    authorization_endpoint: meta.authorization_endpoint,
+    token_endpoint: meta.token_endpoint,
+    registration_endpoint: meta.registration_endpoint,
+  })) {
+    if (ep) assertSameSecureOrigin(name, issuer, ep);
+  }
+}
+
+const OAUTH_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Verify a discovered OAuth endpoint shares the issuer's origin and is
+ * https (loopback http tolerated for local dev). Throws on mismatch so
+ * credentials are never sent to an endpoint the issuer didn't vouch for.
+ * Exported for tests.
+ */
+export function assertSameSecureOrigin(name: string, issuer: string, endpoint: string): void {
+  let iu: URL;
+  let eu: URL;
+  try {
+    iu = new URL(issuer);
+  } catch {
+    throw new Error(`OAuth issuer URL is invalid: ${issuer}`);
+  }
+  try {
+    eu = new URL(endpoint);
+  } catch {
+    throw new Error(`OAuth ${name} is not a valid URL: ${endpoint}`);
+  }
+  const loopback = OAUTH_LOOPBACK_HOSTS.has(iu.hostname);
+  if (eu.protocol !== "https:" && !(loopback && eu.protocol === "http:")) {
+    throw new Error(`OAuth ${name} must be https: ${endpoint}`);
+  }
+  // Same-origin, but treat loopback aliases (localhost / 127.0.0.1 / ::1) as
+  // equivalent when scheme+port match, so local dev doesn't fail just
+  // because the issuer and discovery doc spell loopback differently.
+  const loopbackAliased =
+    loopback &&
+    OAUTH_LOOPBACK_HOSTS.has(eu.hostname) &&
+    eu.protocol === iu.protocol &&
+    eu.port === iu.port;
+  if (eu.origin !== iu.origin && !loopbackAliased) {
+    throw new Error(
+      `OAuth ${name} (${eu.origin}) is not same-origin as the issuer (${iu.origin})`
+    );
+  }
+}
+
 export class SiloOAuthClient {
   private creds?: StoredCredentials;
   private metadata?: ServerMetadata;
@@ -75,13 +141,24 @@ export class SiloOAuthClient {
   private persist(): void {
     mkdirSync(dirname(this.config.tokenPath), { recursive: true });
     writeFileSync(this.config.tokenPath, JSON.stringify(this.creds, null, 2), { mode: 0o600 });
+    // writeFileSync's mode is ignored when the file already exists (every
+    // token refresh overwrites), so enforce 0600 explicitly — this file
+    // holds the refresh token. Best-effort: a chmod failure must not break
+    // token persistence (the content is already written).
+    try {
+      chmodSync(this.config.tokenPath, 0o600);
+    } catch {
+      /* best effort */
+    }
   }
 
   private async discover(): Promise<ServerMetadata> {
     if (this.metadata) return this.metadata;
     const res = await fetch(`${this.config.serverUrl}/.well-known/oauth-authorization-server`);
     if (!res.ok) throw new Error(`OAuth discovery failed: ${res.status}`);
-    this.metadata = (await res.json()) as ServerMetadata;
+    const meta = (await res.json()) as ServerMetadata;
+    validateDiscoveredEndpoints(this.config.serverUrl, meta);
+    this.metadata = meta;
     return this.metadata;
   }
 

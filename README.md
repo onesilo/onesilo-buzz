@@ -255,6 +255,8 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `NODE_ADMIN_TOKEN` | *(from `~/.silo-node/admin.token`)* | Explicit node admin token override |
 | `NODE_LAN_URL` | `http://127.0.0.1:8765` | silo-node LAN API (memory, `/v1/cloud` relay) |
 | `NODE_KEY` | *(from `~/.silo-node/node.key` or admin API)* | Explicit node key override |
+| `NODE_ALLOW_REMOTE` | *(unset)* | Set `1` to allow a non-loopback node URL (requires https) |
+| `AGENT_SECRET_KEY_PATH` | `.silo/agent.key` | Where a freshly generated agent key is written (0600) |
 
 ## Privacy & control
 
@@ -264,6 +266,26 @@ Everything is environment-driven — see [`.env.example`](.env.example).
   connection you can inspect, limit, or revoke at any time.
 - Memory-replacing writes are never auto-confirmed by the agent.
 - Recall is auditable: every memory traces back to a signed Buzz event.
+
+## Security
+
+- **Node credentials stay local.** The node admin token and node key are
+  attached only to loopback URLs; a misconfigured `NODE_URL`/`NODE_LAN_URL`
+  pointing off-machine is refused unless you set `NODE_ALLOW_REMOTE=1`, and
+  even then plaintext `http://` to a remote host is rejected — credentials
+  never leave the machine in the clear.
+- **Generated identity keys never hit logs.** A freshly minted agent key is
+  written to a `0600` file (`AGENT_SECRET_KEY_PATH`), not printed to stdout,
+  and loaded back automatically on the next start (env > file > generate), so
+  the identity is stable without exposing the key.
+- **OAuth discovery is pinned.** Discovered `authorization`/`token`/
+  `registration` endpoints must be same-origin as the issuer and https, so a
+  hostile discovery document can't redirect the auth code, PKCE verifier, or
+  refresh token to another host.
+- **Raw transcripts never leave with `DISTILL_MODE=node`.** Distillation
+  runs on the local node; only distilled statements sync, and if the node is
+  down captures buffer rather than fall back to shipping raw text.
+- Outbound TLS uses default certificate verification (never disabled).
 
 ## Roadmap
 

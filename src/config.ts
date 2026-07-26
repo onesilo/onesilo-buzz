@@ -85,12 +85,26 @@ export function loadConfig(env = process.env): Config {
       overlapTurns: parseCount(env.CAPTURE_OVERLAP_TURNS, 2, 0),
       idleFlushMs: parseCount(env.CAPTURE_IDLE_FLUSH_SECONDS, 600) * 1000,
     },
-    node: {
-      adminUrl: env.NODE_URL ?? "http://127.0.0.1:8766",
-      adminToken: env.NODE_ADMIN_TOKEN,
-      lanUrl: env.NODE_LAN_URL ?? "http://127.0.0.1:8765",
-      key: env.NODE_KEY,
-    },
+    node: (() => {
+      const adminUrl = env.NODE_URL ?? "http://127.0.0.1:8766";
+      const lanUrl = env.NODE_LAN_URL ?? "http://127.0.0.1:8765";
+      // The node admin token and node key are high-value secrets (the admin
+      // token can read the node key and drive local compute). The whole
+      // design assumes the node is on this machine, so refuse to attach
+      // those credentials to a non-loopback host unless the operator
+      // explicitly opts in — and even then require https so they never go
+      // out in cleartext. Guards against a misconfigured NODE_URL silently
+      // exfiltrating credentials.
+      const allowRemote = env.NODE_ALLOW_REMOTE === "1";
+      assertNodeUrlSafe("NODE_URL", adminUrl, allowRemote);
+      assertNodeUrlSafe("NODE_LAN_URL", lanUrl, allowRemote);
+      return {
+        adminUrl,
+        adminToken: env.NODE_ADMIN_TOKEN,
+        lanUrl,
+        key: env.NODE_KEY,
+      };
+    })(),
     distill: env.DISTILL_MODE === "node" ? "node" : "cloud",
     silo: siloConfig(mode, env),
   };
@@ -119,6 +133,38 @@ function siloConfig(
       };
     case "local":
       return { mode, path: env.SILO_LOCAL_PATH ?? ".silo/memories.json" };
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Reject a node URL that would send the admin token / node key somewhere
+ * unsafe. Loopback hosts are always fine (http included). A non-loopback
+ * host is refused unless NODE_ALLOW_REMOTE=1, and even then must be https
+ * so credentials are never sent in cleartext.
+ */
+function assertNodeUrlSafe(name: string, raw: string, allowRemote: boolean): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} is not a valid URL: ${raw}`);
+  }
+  const host = url.hostname;
+  if (LOOPBACK_HOSTS.has(host)) return;
+  if (!allowRemote) {
+    throw new Error(
+      `${name}=${raw} points at a non-loopback host. The node admin token / node key ` +
+        `must not be sent off this machine. Set NODE_ALLOW_REMOTE=1 (and use https://) ` +
+        `only if you intend to reach a remote node over a trusted channel.`
+    );
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(
+      `${name}=${raw} is a remote host over plaintext ${url.protocol}. ` +
+        `Use https:// so the node credentials aren't exposed on the wire.`
+    );
   }
 }
 

@@ -6,8 +6,10 @@
  * walkthrough, run `npm run demo` instead.
  */
 
+import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { dirname } from "node:path";
 import { loadConfig } from "./config.js";
-import { loadIdentity, exportSecretKeyHex } from "./buzz/identity.js";
+import { loadIdentity, exportSecretKeyHex, resolveAgentSecretKeyHex } from "./buzz/identity.js";
 import { WebSocketRelay } from "./buzz/relay.js";
 import { LocalSiloStore } from "./silo/local.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
@@ -23,11 +25,55 @@ import type { MemoryStore } from "./silo/types.js";
 const log = (line: string) => console.log(`[silo-memory] ${line}`);
 
 const config = loadConfig();
-const identity = loadIdentity(config.agentHandle, config.agentSecretKeyHex);
-if (!config.agentSecretKeyHex) {
-  console.log(
-    `Generated a new agent keypair. To keep this identity, set AGENT_SECRET_KEY=${exportSecretKeyHex(identity)}`
-  );
+
+// Agent identity precedence: AGENT_SECRET_KEY env > persisted key file >
+// generate a fresh one and persist it. Loading the file back is what makes
+// the identity stable across restarts.
+const keyPath = process.env.AGENT_SECRET_KEY_PATH ?? ".silo/agent.key";
+const resolvedSecret = resolveAgentSecretKeyHex(config.agentSecretKeyHex, keyPath);
+const identity = loadIdentity(config.agentHandle, resolvedSecret.hex);
+if (resolvedSecret.fromFile) {
+  log(`Loaded agent identity from ${keyPath} (pubkey ${identity.pubkey.slice(0, 12)}…).`);
+} else if (!resolvedSecret.hex) {
+  // A freshly generated key is the agent's signing identity — a genuine
+  // secret. Never print it to stdout, where it would be captured by log
+  // aggregators/CI logs indefinitely. Persist it to a 0600 file and log
+  // only the path (+ the public key, which is not sensitive). resolve only
+  // returns undefined when no key file exists, so this always creates a new
+  // file — writeFileSync's mode applies (it's only ignored on existing
+  // files) and we never clobber an existing key.
+  let persisted = false;
+  try {
+    mkdirSync(dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, `${exportSecretKeyHex(identity)}\n`, { mode: 0o600 });
+    persisted = true;
+    // Best-effort tighten (in case of an unusual umask/pre-existing inode);
+    // a chmod failure must NOT drop us into the reveal path — the key is
+    // already safely on disk.
+    try {
+      chmodSync(keyPath, 0o600);
+    } catch {
+      /* best effort */
+    }
+    log(
+      `Generated a new agent identity (pubkey ${identity.pubkey.slice(0, 12)}…). ` +
+        `Wrote its secret key to ${keyPath} (0600); it will be loaded automatically ` +
+        `on the next start. Keep that file to preserve this identity.`
+    );
+  } catch (err) {
+    // The write itself failed — the key is not on disk. Only reveal it on an
+    // interactive terminal, so it still never lands in piped/aggregated logs.
+    if (!persisted && process.stdout.isTTY) {
+      console.log(
+        `Generated a new agent keypair. To keep this identity, set AGENT_SECRET_KEY=${exportSecretKeyHex(identity)}`
+      );
+    } else {
+      log(
+        `Generated a new agent identity but could not persist it (${err}). Set ` +
+          `AGENT_SECRET_KEY or AGENT_SECRET_KEY_PATH to keep a stable identity.`
+      );
+    }
+  }
 }
 
 // Node key for the LAN APIs (memory, cloud relay): env/file first; if
