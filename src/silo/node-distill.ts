@@ -14,6 +14,7 @@
  * raw transcript: privacy degradation is never an automatic decision.
  */
 
+import { createHash } from "node:crypto";
 import type { TranscriptSegment, Turn } from "../memory/window.js";
 import type {
   Memory,
@@ -73,6 +74,12 @@ export class NodeDistillingStore implements MemoryStore {
     // Provenance anchors to the turn that closed the episode (usually the
     // decision itself). A distilled statement can span speakers; the
     // anchor is the audit trail back into Buzz, not an authorship claim.
+    //
+    // A mid-segment inner.remember failure rethrows and the whole segment
+    // retries (window restore). That re-sends statements stored before the
+    // failure — safe because statement ids are deterministic (id-keyed
+    // stores overwrite in place) and the silo's ingestion pipeline dedupes
+    // identical re-captures, mirroring the redelivery posture in agent.ts.
     const anchor = segment.fresh[segment.fresh.length - 1] ?? segment.turns[segment.turns.length - 1]!;
     let held = 0;
     for (const s of statements) {
@@ -175,7 +182,15 @@ export function parseStatements(text: string): Statement[] {
 
 function toMemory(s: Statement, segment: TranscriptSegment, anchor: Turn): Memory {
   return {
-    id: "",
+    // Deterministic per-statement id (same scheme as the heuristic
+    // extractor: anchored event + discriminator). Two things depend on it:
+    // id-keyed stores must not clobber sibling statements from one segment,
+    // and a segment retried after a partial failure must overwrite its
+    // already-stored statements instead of duplicating them.
+    id: createHash("sha256")
+      .update(`${anchor.eventId}:${s.kind}:${s.content}`)
+      .digest("hex")
+      .slice(0, 16),
     kind: s.kind,
     content: s.content,
     raw: s.content, // the distilled statement IS the payload; raw stays local

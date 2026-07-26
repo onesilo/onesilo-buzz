@@ -126,6 +126,53 @@ test("optional inner methods are only exposed when the inner store has them", as
   assert.equal(wrappedBare.ask, undefined);
 });
 
+test("sibling statements get distinct deterministic ids (no local clobbering)", async () => {
+  const { LocalSiloStore } = await import("../src/silo/local.js");
+  const local = new LocalSiloStore();
+  const store = wrapWithNodeDistillation(
+    local,
+    fakeNode("decision: ship Friday\naction_item: bob rotates the keys\nfact: staging runs postgres 16")
+  );
+  await store.rememberTranscript!(segment([turn("a", "we decided a bunch of things")]));
+  assert.equal(local.size, 3); // three statements, three entries — not one
+  const contents = (await local.recent(undefined, 10)).map((m) => m.content).sort();
+  assert.deepEqual(contents, [
+    "bob rotates the keys",
+    "ship Friday",
+    "staging runs postgres 16",
+  ]);
+});
+
+test("a retried segment overwrites its statements instead of duplicating", async () => {
+  const { LocalSiloStore } = await import("../src/silo/local.js");
+  const local = new LocalSiloStore();
+  // First attempt fails after the first statement lands; the agent's window
+  // restores the segment and the next flush retries the whole thing.
+  let failOnce = true;
+  const flaky: MemoryStore = {
+    remember: async (m) => {
+      const outcome = await local.remember(m);
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("transient silo outage");
+      }
+      return outcome;
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const store = wrapWithNodeDistillation(
+    flaky,
+    fakeNode("decision: ship Friday\nfact: staging runs postgres 16")
+  );
+  const seg = segment([turn("a", "we decided to ship Friday on pg16")]);
+  await assert.rejects(store.rememberTranscript!(seg));
+  assert.equal(local.size, 1); // first statement stored before the failure
+  await store.rememberTranscript!(seg); // retry re-sends both
+  assert.equal(local.size, 2); // deterministic ids: overwrite, not duplicate
+});
+
 test("parseStatements tolerates bullets, numbering, and junk kinds", () => {
   const statements = parseStatements(
     [
