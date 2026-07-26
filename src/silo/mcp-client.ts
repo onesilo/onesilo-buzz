@@ -7,8 +7,6 @@
  * OAuth refresh + retry on 401.
  */
 
-import type { SiloOAuthClient } from "./oauth.js";
-
 const PROTOCOL_VERSION = "2025-06-18";
 
 export interface ToolResult {
@@ -17,7 +15,46 @@ export interface ToolResult {
   isError: boolean;
 }
 
+/** The OAuth surface McpClient historically consumed (SiloOAuthClient). */
+export interface OAuthLike {
+  ensureAccessToken(): Promise<string>;
+  refresh(): Promise<unknown>;
+}
+
+/**
+ * Pluggable request auth: the cloud MCP endpoint wants an OAuth bearer
+ * token; a gateway silo-node's relay (/v1/cloud/mcp) wants the node key.
+ */
+export interface McpAuth {
+  headers(): Promise<Record<string, string>>;
+  /** Attempt 401 recovery; true = retry the request once. */
+  reauthorize(): Promise<boolean>;
+}
+
+/** Node-key auth for a gateway node's MCP relay. Resolved per request. */
+export function nodeKeyAuth(key: () => string): McpAuth {
+  return {
+    headers: async () => ({ "X-Silo-Node-Key": key() }),
+    // A rejected node key won't heal by retrying — fail loudly instead.
+    reauthorize: async () => false,
+  };
+}
+
+function normalizeAuth(auth: OAuthLike | McpAuth): McpAuth {
+  if ("ensureAccessToken" in auth) {
+    return {
+      headers: async () => ({ Authorization: `Bearer ${await auth.ensureAccessToken()}` }),
+      reauthorize: async () => {
+        await auth.refresh();
+        return true;
+      },
+    };
+  }
+  return auth;
+}
+
 export class McpClient {
+  private readonly auth: McpAuth;
   private sessionId?: string;
   private initialized = false;
   private rpcId = 0;
@@ -25,23 +62,24 @@ export class McpClient {
   constructor(
     /** Full MCP endpoint URL, e.g. https://api.onesilo.com/mcp */
     private readonly url: string,
-    private readonly oauth: SiloOAuthClient,
+    auth: OAuthLike | McpAuth,
     private readonly clientInfo = { name: "buzz-silo-memory", version: "0.1.0" }
-  ) {}
+  ) {
+    this.auth = normalizeAuth(auth);
+  }
 
   private async post(body: unknown, retryOn401 = true): Promise<{ rpc: unknown; res: Response }> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
-      Authorization: `Bearer ${await this.oauth.ensureAccessToken()}`,
+      ...(await this.auth.headers()),
       "MCP-Protocol-Version": PROTOCOL_VERSION,
     };
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
 
     const res = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(body) });
 
-    if (res.status === 401 && retryOn401) {
-      await this.oauth.refresh();
+    if (res.status === 401 && retryOn401 && (await this.auth.reauthorize())) {
       return this.post(body, false);
     }
     if (!res.ok && res.status !== 202) {

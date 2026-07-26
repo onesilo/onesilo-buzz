@@ -75,6 +75,38 @@ test("remember reports requires_confirmation without confirming", async () => {
 const trailered = (channel: string, text: string) =>
   `${text}\n\n[buzz kind=decision salience=0.9 channel=${channel} author=deadbeefdeadbeef event=ev1 ts=1753000000]`;
 
+test("rememberTranscript sends a speaker-attributed transcript to the channel's bucket", async () => {
+  const router = SiloBucketRouter.fromEnv("default", "eng=silo-eng");
+  const { client, calls } = fakeMcp(() => ({ payload: { status: "queued" }, isError: false }));
+  const contextTurn = {
+    authorPubkey: "alicepubkey1234",
+    content: "should we ship this week?",
+    createdAt: 100,
+    eventId: "ev1",
+  };
+  const freshTurn = {
+    authorPubkey: "bobpubkey567890",
+    content: "yeah let's do that",
+    createdAt: 160,
+    eventId: "ev2",
+  };
+  const outcome = await new McpSiloStore(client, router).rememberTranscript({
+    channelId: "eng",
+    reason: "salience",
+    turns: [contextTurn, freshTurn],
+    fresh: [freshTurn],
+  });
+  assert.deepEqual(outcome, { status: "queued" });
+  assert.equal(calls[0]!.name, "silo_remember");
+  assert.equal(calls[0]!.args.silo_id, "silo-eng");
+  const content = calls[0]!.args.content as string;
+  // Overlap turns are marked so the server-side distiller treats them as
+  // reference context instead of re-capturing them.
+  assert.match(content, /\(context, already captured\) \[alicepub\] should we ship this week\?/);
+  assert.match(content, /\n\[bobpubke\] yeah let's do that/);
+  assert.match(content, /\[buzz transcript channel=eng .* from=100 to=160 turns=2 context=1\]/);
+});
+
 test("recall maps silo_recall hits and recovers provenance from the trailer", async () => {
   const { client, calls } = fakeMcp(() => ({
     payload: {

@@ -21,6 +21,7 @@
  */
 
 import type { McpClient } from "./mcp-client.js";
+import type { TranscriptSegment } from "../memory/window.js";
 import { SiloBucketRouter } from "./buckets.js";
 import type {
   Memory,
@@ -115,20 +116,41 @@ export class McpSiloStore implements MemoryStore {
       content,
     });
     if (isError) throw new Error(`silo_remember failed: ${describe(payload)}`);
-    const body = (payload ?? {}) as { status?: string; id?: string; memory_id?: string };
-    if (body.status === "requires_confirmation") {
-      this.log(
-        `silo_remember requires confirmation (would replace existing memories) — skipped: ${memory.content}`
-      );
-      return { status: "needs_confirmation" };
-    }
-    // Some capture paths apply synchronously and return the stored id —
-    // pass it through so !remember can confirm with a real, forgettable id.
-    const storedId = body.id ?? body.memory_id;
-    if (body.status === "stored" && typeof storedId === "string" && storedId) {
-      return { status: "stored", id: storedId };
-    }
-    return { status: "queued" };
+    return interpretRememberPayload(payload, (line) => this.log(line), memory.content);
+  }
+
+  /**
+   * Capture a conversation segment as a speaker-attributed transcript.
+   * silo_remember is designed for raw conversation input — the server-side
+   * pipeline distills it WITH turn context ("yeah let's do that" next to
+   * its antecedent) and runs enrichment (entities, topics, relationships).
+   */
+  async rememberTranscript(segment: TranscriptSegment): Promise<RememberOutcome> {
+    const first = segment.turns[0]!;
+    const last = segment.turns[segment.turns.length - 1]!;
+    // Overlap turns were already captured by the previous segment; mark
+    // them so the server-side distiller treats them as reference context,
+    // not content to re-capture.
+    const freshIds = new Set(segment.fresh.map((t) => t.eventId));
+    const lines = segment.turns
+      .map(
+        (t) =>
+          `${freshIds.has(t.eventId) ? "" : "(context, already captured) "}` +
+          `[${t.authorPubkey.slice(0, 8)}] ${t.content}`
+      )
+      .join("\n");
+    const content =
+      `Buzz conversation transcript (channel ${segment.channelId}):\n${lines}\n\n` +
+      `[buzz transcript channel=${segment.channelId} ` +
+      `events=${first.eventId.slice(0, 12)}..${last.eventId.slice(0, 12)} ` +
+      `from=${first.createdAt} to=${last.createdAt} turns=${segment.turns.length} ` +
+      `context=${segment.turns.length - segment.fresh.length}]`;
+    const { payload, isError } = await this.mcp.callTool("silo_remember", {
+      silo_id: this.router.resolve(segment.channelId),
+      content,
+    });
+    if (isError) throw new Error(`silo_remember failed: ${describe(payload)}`);
+    return interpretRememberPayload(payload, (line) => this.log(line), content);
   }
 
   /**
@@ -229,6 +251,28 @@ export class McpSiloStore implements MemoryStore {
 
 function describe(payload: unknown): string {
   return typeof payload === "string" ? payload : JSON.stringify(payload);
+}
+
+/** Shared silo_remember response handling for single memories + transcripts. */
+function interpretRememberPayload(
+  payload: unknown,
+  log: (line: string) => void,
+  captured: string
+): RememberOutcome {
+  const body = (payload ?? {}) as { status?: string; id?: string; memory_id?: string };
+  if (body.status === "requires_confirmation") {
+    log(
+      `silo_remember requires confirmation (would replace existing memories) — skipped: ${captured.slice(0, 120)}`
+    );
+    return { status: "needs_confirmation" };
+  }
+  // Some capture paths apply synchronously and return the stored id —
+  // pass it through so !remember can confirm with a real, forgettable id.
+  const storedId = body.id ?? body.memory_id;
+  if (body.status === "stored" && typeof storedId === "string" && storedId) {
+    return { status: "stored", id: storedId };
+  }
+  return { status: "queued" };
 }
 
 /**

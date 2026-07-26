@@ -1,3 +1,5 @@
+import type { TranscriptSegment } from "../memory/window.js";
+
 /**
  * Memory model shared by every silo store implementation.
  *
@@ -93,4 +95,11 @@ export interface MemoryStore {
    * (silo_get_scope — silos, granted shapes) and validate configuration.
    */
   init?(): Promise<void>;
+  /**
+   * Capture a whole conversation segment (speaker-attributed transcript)
+   * for server-side distillation with turn context. Stores without this
+   * fall back to per-turn heuristic extraction of the segment's fresh
+   * turns.
+   */
+  rememberTranscript?(segment: TranscriptSegment): Promise<RememberOutcome>;
 }

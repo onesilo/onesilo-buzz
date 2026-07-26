@@ -39,9 +39,12 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ## What the agent does
 
-- **Listens quietly.** In channels it's been added to, it distills messages
-  into typed memories — decisions, facts, preferences, action items — with a
-  salience score. Small talk is ignored. It never speaks unless spoken to.
+- **Listens quietly, in context.** In channels it's been added to, it
+  buffers conversation into rolling turn windows and captures whole
+  **episodes** — speaker-attributed transcripts — so "yeah let's do that"
+  is remembered *with* the turns that give it meaning. Decision-like turns
+  flush their window immediately; the rest flush when the episode goes
+  quiet. It never speaks unless spoken to.
 - **Remembers on demand.** `!remember <text>` stores something verbatim.
 - **Answers from memory.** `@silo <question>` or `!recall <query>` returns a
   grounded answer composed from the silo's memory. A decision made in `#eng`
@@ -135,10 +138,74 @@ The agent speaks two open protocols and nothing else:
   own memory. Memory-replacing writes are surfaced for owner confirmation,
   never auto-applied by the agent.
 
+**Conversation-aware capture.** The agent is a *segmenter*, not a
+distiller: it decides where a conversational episode begins and ends, and
+One Silo's server-side pipeline does the semantic work with full turn
+context. An episode flushes when a decision-like turn appears (immediately,
+so it's recallable fast), when the window fills (`CAPTURE_WINDOW_TURNS`),
+or when the channel goes quiet (`CAPTURE_IDLE_FLUSH_SECONDS`); the last
+`CAPTURE_OVERLAP_TURNS` turns carry into the next segment so episodes that
+span a flush keep their thread. Failed captures are retained and retried on
+the next flush. Note the privacy posture this implies: **raw conversation
+transcripts from the agent's channels are sent to your silo** (not just
+distilled one-liners) — only add the agent to channels whose content
+belongs in that memory. If you'd rather raw conversation never leave your
+machine at all, run a silo-node and turn on private distillation (next
+section).
+
+## Pairing with a silo-node
+
+Run an open-source [silo-node](https://github.com/onesilo/onesilo-node) on
+the same machine and the agent composes with it out of the box — two
+independent switches control where things run:
+
+| `SILO_MODE` | `DISTILL_MODE` | Memory lives | Distillation runs | Cloud credential |
+| --- | --- | --- | --- | --- |
+| `mcp` *(default)* | `cloud` *(default)* | your cloud silo | One Silo | agent's own OAuth |
+| `mcp` | `node` | your cloud silo | **your node** | agent's own OAuth |
+| `relay` | `node` | your cloud silo, via the node | **your node** | **the node's sign-in only** |
+| `node` | `node` | **your node** (SQLite, hybrid recall) | **your node** | **none** |
+
+- **`SILO_MODE=relay`** — One Silo through a *gateway* node's MCP relay
+  (`/v1/cloud/mcp`). The node holds the only cloud credential; the agent
+  authenticates to the node with the node key and **never pairs** (`npm run
+  connect` not needed). One connection in the dashboard: the node.
+- **`SILO_MODE=node`** — memory served entirely by the node's memory API:
+  SQLite with FTS5 keyword search, fused with vector recall when the node's
+  compute is on. With `DISTILL_MODE=node` this is the **fully on-machine
+  stack**: capture, distillation, storage, and recall never leave hardware
+  you own.
+
+Both find the node automatically: LAN APIs at `127.0.0.1:8765`, node key
+from `~/.silo-node/node.key` or the admin API (`NODE_LAN_URL` / `NODE_KEY`
+override).
+
+**Private distillation with silo-node.** For workspaces that don't want raw
+transcripts leaving their hardware, pair the agent with a node on the same
+machine:
+
+```bash
+# once, on the same machine (downloads a local model if needed):
+silo-node setup && silo-node
+
+# then run the agent with:
+DISTILL_MODE=node npm start
+```
+
+With `DISTILL_MODE=node`, each conversation segment is distilled **by the
+node's local model** (via the node's admin API) into standalone memory
+statements — decisions, facts, action items, preferences — and only those
+statements sync to your silo. It works out of the box: the agent finds the
+node at `127.0.0.1:8766` and reads the admin token `silo-node setup` wrote
+to `~/.silo-node/admin.token`. If the node is down, captures buffer in the
+turn window and retry until it's back — the agent **never** falls back to
+shipping raw transcripts; privacy degradation is not an automatic decision.
+
 | Path | What it is |
 | --- | --- |
 | `src/buzz/` | Nostr protocol surface: event parsing, agent identity, relay transport, and an in-process fake relay for demo/tests |
-| `src/silo/` | The `MemoryStore` contract with two backends: One Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use |
+| `src/silo/` | The `MemoryStore` contract with two backends: One Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use; `node-distill.ts` wraps either with silo-node private distillation |
+| `src/node/` | Client for a local silo-node's admin API (`/v1/compute/generate`) |
 | `src/memory/` | Distillation heuristics and reply formatting |
 | `src/agent.ts` | The agent loop: routes events to ingest / commands / recall |
 | `src/connect.ts` | One-time OAuth pairing CLI |
@@ -175,11 +242,19 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `BUZZ_CHANNEL_IDS` | *(all visible)* | Comma-separated channels to listen in |
 | `AGENT_HANDLE` | `silo` | The agent's @handle |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
-| `SILO_MODE` | `mcp` | `mcp` (One Silo platform) or `local` (JSON file) |
+| `SILO_MODE` | `mcp` | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://api.onesilo.com` | Silo control plane |
 | `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
 | `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |
 | `SILO_TOKEN_PATH` | `.silo/oauth.json` | Where OAuth tokens persist |
+| `CAPTURE_WINDOW_TURNS` | `12` | Turns buffered before a segment flushes |
+| `CAPTURE_OVERLAP_TURNS` | `2` | Turns carried into the next segment as context |
+| `CAPTURE_IDLE_FLUSH_SECONDS` | `600` | Quiet time that closes an episode |
+| `DISTILL_MODE` | `cloud` | `cloud` (silo distills raw segments) or `node` (a local silo-node distills; only statements leave the machine) |
+| `NODE_URL` | `http://127.0.0.1:8766` | silo-node admin API (distillation, status) |
+| `NODE_ADMIN_TOKEN` | *(from `~/.silo-node/admin.token`)* | Explicit node admin token override |
+| `NODE_LAN_URL` | `http://127.0.0.1:8765` | silo-node LAN API (memory, `/v1/cloud` relay) |
+| `NODE_KEY` | *(from `~/.silo-node/node.key` or admin API)* | Explicit node key override |
 
 ## Privacy & control
 

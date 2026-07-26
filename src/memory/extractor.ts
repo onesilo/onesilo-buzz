@@ -56,6 +56,21 @@ export function isQuestion(text: string): boolean {
   );
 }
 
+/**
+ * Salience trigger for conversation-aware capture: does this turn look
+ * important enough to flush its window NOW (rather than waiting for the
+ * idle/size flush)? Same signals as extraction, used only for timing —
+ * the actual distillation happens with full turn context.
+ */
+export function isSalient(text: string): boolean {
+  const t = text.trim();
+  const tokens = tokenize(t);
+  if (tokens.length < MIN_TOKENS || isQuestion(t)) return false;
+  return PATTERNS.some(
+    (p) => p.regex.test(t) && (p.kind !== "fact" || tokens.length >= FACT_MIN_TOKENS)
+  );
+}
+
 export function memoryId(eventId: string, suffix = "0"): string {
   return createHash("sha256").update(`${eventId}:${suffix}`).digest("hex").slice(0, 16);
 }

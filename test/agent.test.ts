@@ -92,14 +92,16 @@ test("a statement in a mention is answered AND captured; a question is not captu
   assert.equal(store.size, 1); // the question itself was not stored
 });
 
-test("a failed passive capture is retryable via redelivery", async () => {
+test("a failed capture is retained in the window and retried on the next flush", async () => {
   const identity = loadIdentity("silo");
   const relay = new FakeRelay(identity.secretKey);
   let attempts = 0;
+  const captured: string[] = [];
   const flaky: MemoryStore = {
-    remember: async () => {
+    remember: async (m) => {
       attempts += 1;
       if (attempts === 1) throw new Error("transient silo outage");
+      captured.push(m.content);
       return { status: "queued" };
     },
     recall: async () => [],
@@ -108,20 +110,25 @@ test("a failed passive capture is retryable via redelivery", async () => {
   };
   const agent = new SiloMemoryAgent(relay, flaky, identity);
   await agent.start();
-  const event = finalizeEvent(
-    {
-      kind: KIND_CHANNEL_MESSAGE,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [[CHANNEL_TAG, "eng"]],
-      content: "we decided to ship the payments migration on Friday",
-    },
-    generateSecretKey()
-  );
-  relay.deliver(event);
-  await settle();
-  relay.deliver(event); // redelivery retries because the first capture failed
-  await settle();
-  assert.equal(attempts, 2);
+  const say = (content: string) =>
+    agent.handleEvent(
+      finalizeEvent(
+        {
+          kind: KIND_CHANNEL_MESSAGE,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [[CHANNEL_TAG, "eng"]],
+          content,
+        },
+        generateSecretKey()
+      )
+    );
+  // Salient → immediate flush, which fails; the turn is restored.
+  await say("we decided to ship the payments migration on Friday");
+  assert.equal(captured.length, 0);
+  // The next salient flush retries the restored turn along with the new one.
+  await say("we decided the rollback owner will be bob this week");
+  assert.equal(captured.length, 2);
+  assert.match(captured[0]!, /payments migration/);
 });
 
 test("a mention statement is still captured when reply delivery fails", async () => {
@@ -283,6 +290,150 @@ test("silo errors on commands produce an apologetic reply", async () => {
   await settle();
   assert.equal(relay.published.length, 1);
   assert.match(relay.published[0]!.content, /hit an error/);
+});
+
+test("transcript-capable stores receive whole segments with context", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const segments: Array<{ turns: number; contents: string[] }> = [];
+  const transcriptStore: MemoryStore = {
+    remember: async () => ({ status: "queued" }),
+    rememberTranscript: async (segment) => {
+      segments.push({
+        turns: segment.turns.length,
+        contents: segment.turns.map((t) => t.content),
+      });
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, transcriptStore, identity);
+  await agent.start();
+  const sk = generateSecretKey();
+  const say = (content: string) =>
+    agent.handleEvent(
+      finalizeEvent(
+        {
+          kind: KIND_CHANNEL_MESSAGE,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [[CHANNEL_TAG, "eng"]],
+          content,
+        },
+        sk
+      )
+    );
+  await say("should we ship the payments migration this week?"); // buffered
+  await say("flag looks ready on staging honestly"); // buffered
+  await say("ok we decided to ship it Friday"); // salient → flush with context
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0]!.turns, 3); // the antecedents travel with the decision
+  assert.match(segments[0]!.contents[0]!, /should we ship/);
+  assert.match(segments[0]!.contents[2]!, /decided to ship it Friday/);
+});
+
+test("stop() drains queued events before the shutdown flush", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const segments: Array<{ reason: string; turns: number }> = [];
+  const transcriptStore: MemoryStore = {
+    remember: async () => ({ status: "queued" }),
+    rememberTranscript: async (segment) => {
+      segments.push({ reason: segment.reason, turns: segment.turns.length });
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, transcriptStore, identity);
+  await agent.start();
+  // Delivered but NOT settled: the handler is still queued when stop() runs.
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "just chatting about the offsite plans",
+      },
+      generateSecretKey()
+    )
+  );
+  await agent.stop();
+  assert.equal(segments.length, 1); // the queued turn made it into the final flush
+  assert.equal(segments[0]!.reason, "shutdown");
+  assert.equal(segments[0]!.turns, 1);
+});
+
+test("shutdown flush retries a transient silo error instead of dropping turns", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  let failures = 2;
+  const captured: string[] = [];
+  const flaky: MemoryStore = {
+    remember: async (m) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("transient silo outage");
+      }
+      captured.push(m.content);
+      return { status: "queued" };
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, flaky, identity, { shutdownRetryMs: 1 });
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "we decided to postpone the launch to Monday",
+      },
+      generateSecretKey()
+    )
+  );
+  // The salient in-queue flush fails once; stop()'s retries land it.
+  await agent.stop();
+  assert.equal(captured.length, 1);
+  assert.match(captured[0]!, /postpone the launch/);
+});
+
+test("shutdown names dropped turns when the silo stays down", async () => {
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  const dead: MemoryStore = {
+    remember: async () => {
+      throw new Error("silo hard down");
+    },
+    recall: async () => [],
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, dead, identity, {
+    shutdownRetryMs: 1,
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "we decided to sunset the beta program",
+      },
+      generateSecretKey()
+    )
+  );
+  await agent.stop();
+  assert.match(logs.join("\n"), /dropping 1 uncaptured turn/);
 });
 
 test("mention matching does not false-positive on longer handles", async () => {
