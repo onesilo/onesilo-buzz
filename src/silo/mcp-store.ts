@@ -83,7 +83,7 @@ export class McpSiloStore implements MemoryStore {
       .filter(Boolean);
     this.log(
       `scope: ${silos.length} silo(s) [${silos
-        .map((s) => `${s.name ?? s.title ?? s.id}${s.is_default ? "*" : ""}`)
+        .map((s) => `${s.name ?? s.title ?? s.id ?? s.silo_id}${s.is_default ? "*" : ""}`)
         .join(", ")}], shapes: ${shapes.join(", ") || "(none reported)"}`
     );
     for (const bucket of this.router.buckets) {
