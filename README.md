@@ -275,7 +275,9 @@ Everything is environment-driven — see [`.env.example`](.env.example).
   even then plaintext `http://` to a remote host is rejected — credentials
   never leave the machine in the clear.
 - **Generated identity keys never hit logs.** A freshly minted agent key is
-  written to a `0600` file (`AGENT_SECRET_KEY_PATH`), not printed to stdout.
+  written to a `0600` file (`AGENT_SECRET_KEY_PATH`), not printed to stdout,
+  and loaded back automatically on the next start (env > file > generate), so
+  the identity is stable without exposing the key.
 - **OAuth discovery is pinned.** Discovered `authorization`/`token`/
   `registration` endpoints must be same-origin as the issuer and https, so a
   hostile discovery document can't redirect the auth code, PKCE verifier, or

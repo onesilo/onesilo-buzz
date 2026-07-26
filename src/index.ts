@@ -6,10 +6,10 @@
  * walkthrough, run `npm run demo` instead.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadConfig } from "./config.js";
-import { loadIdentity, exportSecretKeyHex } from "./buzz/identity.js";
+import { loadIdentity, exportSecretKeyHex, resolveAgentSecretKeyHex } from "./buzz/identity.js";
 import { WebSocketRelay } from "./buzz/relay.js";
 import { LocalSiloStore } from "./silo/local.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
@@ -25,20 +25,30 @@ import type { MemoryStore } from "./silo/types.js";
 const log = (line: string) => console.log(`[silo-memory] ${line}`);
 
 const config = loadConfig();
-const identity = loadIdentity(config.agentHandle, config.agentSecretKeyHex);
-if (!config.agentSecretKeyHex) {
+
+// Agent identity precedence: AGENT_SECRET_KEY env > persisted key file >
+// generate a fresh one and persist it. Loading the file back is what makes
+// the identity stable across restarts.
+const keyPath = process.env.AGENT_SECRET_KEY_PATH ?? ".silo/agent.key";
+const resolvedSecret = resolveAgentSecretKeyHex(config.agentSecretKeyHex, keyPath);
+const identity = loadIdentity(config.agentHandle, resolvedSecret.hex);
+if (resolvedSecret.fromFile) {
+  log(`Loaded agent identity from ${keyPath} (pubkey ${identity.pubkey.slice(0, 12)}…).`);
+} else if (!resolvedSecret.hex) {
   // A freshly generated key is the agent's signing identity — a genuine
   // secret. Never print it to stdout, where it would be captured by log
   // aggregators/CI logs indefinitely. Persist it to a 0600 file and log
   // only the path (+ the public key, which is not sensitive).
-  const keyPath = process.env.AGENT_SECRET_KEY_PATH ?? ".silo/agent.key";
   try {
     mkdirSync(dirname(keyPath), { recursive: true });
     writeFileSync(keyPath, `${exportSecretKeyHex(identity)}\n`, { mode: 0o600 });
+    // writeFileSync's mode is ignored when the file already exists, so
+    // enforce 0600 explicitly — this is a secret key.
+    chmodSync(keyPath, 0o600);
     log(
       `Generated a new agent identity (pubkey ${identity.pubkey.slice(0, 12)}…). ` +
-        `Wrote its secret key to ${keyPath} (0600). Keep that file, or set ` +
-        `AGENT_SECRET_KEY from it, to preserve this identity.`
+        `Wrote its secret key to ${keyPath} (0600); it will be loaded automatically ` +
+        `on the next start. Keep that file to preserve this identity.`
     );
   } catch (err) {
     // Couldn't persist it. Only reveal on an interactive terminal, so the

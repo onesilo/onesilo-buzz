@@ -16,7 +16,7 @@
 
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface OAuthConfig {
@@ -47,6 +47,32 @@ export const BUZZ_CLIENT_URI = "https://buzz.xyz";
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Pin the discovered endpoints to the issuer's origin (RFC 8414 §3.3).
+ * Without this, a hostile or MITM'd discovery document could point
+ * token_endpoint at an attacker host — we'd then send the auth code + PKCE
+ * verifier + client secret there, and on every refresh the refresh token
+ * too. `registration_endpoint` is optional in RFC 8414, so only present
+ * endpoints are checked; a required-but-absent endpoint fails naturally in
+ * the code path that needs it. Exported for tests.
+ */
+export function validateDiscoveredEndpoints(
+  issuer: string,
+  meta: {
+    authorization_endpoint?: string;
+    token_endpoint?: string;
+    registration_endpoint?: string;
+  }
+): void {
+  for (const [name, ep] of Object.entries({
+    authorization_endpoint: meta.authorization_endpoint,
+    token_endpoint: meta.token_endpoint,
+    registration_endpoint: meta.registration_endpoint,
+  })) {
+    if (ep) assertSameSecureOrigin(name, issuer, ep);
+  }
 }
 
 const OAUTH_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -107,6 +133,10 @@ export class SiloOAuthClient {
   private persist(): void {
     mkdirSync(dirname(this.config.tokenPath), { recursive: true });
     writeFileSync(this.config.tokenPath, JSON.stringify(this.creds, null, 2), { mode: 0o600 });
+    // writeFileSync's mode is ignored when the file already exists (every
+    // token refresh overwrites), so enforce 0600 explicitly — this file
+    // holds the refresh token.
+    chmodSync(this.config.tokenPath, 0o600);
   }
 
   private async discover(): Promise<ServerMetadata> {
@@ -114,18 +144,7 @@ export class SiloOAuthClient {
     const res = await fetch(`${this.config.serverUrl}/.well-known/oauth-authorization-server`);
     if (!res.ok) throw new Error(`OAuth discovery failed: ${res.status}`);
     const meta = (await res.json()) as ServerMetadata;
-    // Pin the discovered endpoints to the issuer's origin (RFC 8414 §3.3).
-    // Without this, a hostile or MITM'd discovery document could point
-    // token_endpoint at an attacker host — we'd then send the auth code +
-    // PKCE verifier + client secret there, and on every refresh the refresh
-    // token too. Require https and same-origin (loopback http for dev).
-    for (const [name, ep] of Object.entries({
-      authorization_endpoint: meta.authorization_endpoint,
-      token_endpoint: meta.token_endpoint,
-      registration_endpoint: meta.registration_endpoint,
-    })) {
-      assertSameSecureOrigin(name, this.config.serverUrl, ep);
-    }
+    validateDiscoveredEndpoints(this.config.serverUrl, meta);
     this.metadata = meta;
     return this.metadata;
   }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertSameSecureOrigin } from "../src/silo/oauth.js";
+import { assertSameSecureOrigin, validateDiscoveredEndpoints } from "../src/silo/oauth.js";
 
 const ISSUER = "https://api.onesilo.com";
 
@@ -37,6 +37,27 @@ test("tolerates loopback http for a loopback issuer (dev)", () => {
 test("rejects a different port as cross-origin", () => {
   assert.throws(
     () => assertSameSecureOrigin("token_endpoint", ISSUER, "https://api.onesilo.com:9999/token"),
+    /not same-origin/
+  );
+});
+
+test("discovery validation tolerates a missing (optional) registration_endpoint", () => {
+  assert.doesNotThrow(() =>
+    validateDiscoveredEndpoints(ISSUER, {
+      authorization_endpoint: "https://api.onesilo.com/authorize",
+      token_endpoint: "https://api.onesilo.com/oauth/token",
+      // registration_endpoint omitted — optional in RFC 8414
+    })
+  );
+});
+
+test("discovery validation still rejects a cross-origin token_endpoint", () => {
+  assert.throws(
+    () =>
+      validateDiscoveredEndpoints(ISSUER, {
+        authorization_endpoint: "https://api.onesilo.com/authorize",
+        token_endpoint: "https://evil.example.com/token",
+      }),
     /not same-origin/
   );
 });
