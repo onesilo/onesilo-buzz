@@ -6,7 +6,7 @@ import { SiloBucketRouter } from "../src/silo/buckets.js";
 import { McpClient, nodeKeyAuth } from "../src/silo/mcp-client.js";
 import type { Memory } from "../src/silo/types.js";
 
-/** In-memory fake of the silo-node memory API (per-silo id-keyed rows). */
+/** In-memory fake of the onesilo-node memory API (per-silo id-keyed rows). */
 function startFakeNodeMemory(): Promise<{
   server: Server;
   url: string;

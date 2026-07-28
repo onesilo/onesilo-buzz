@@ -1,9 +1,9 @@
 /**
  * Private distillation: a MemoryStore decorator that distills conversation
- * segments on a local silo-node before anything reaches the silo.
+ * segments on a local onesilo-node before anything reaches the silo.
  *
  * With DISTILL_MODE=node the agent's transcript segments are NOT sent raw.
- * Each segment is distilled by the node's own model (silo-node's
+ * Each segment is distilled by the node's own model (onesilo-node's
  * POST /v1/compute/generate) into standalone memory statements, and only
  * those statements are written to the inner store. Raw conversation never
  * leaves machines the operator owns.
@@ -43,8 +43,8 @@ export class NodeDistillingStore implements MemoryStore {
     if (this.inner.init) await this.inner.init();
     if (!this.node.hasToken) {
       this.log(
-        `warning: no silo-node admin token found — set NODE_ADMIN_TOKEN or run ` +
-          `\`silo-node setup\` on this machine. Captures will buffer until fixed.`
+        `warning: no onesilo-node admin token found — set NODE_ADMIN_TOKEN or run ` +
+          `\`onesilo-node setup\` on this machine. Captures will buffer until fixed.`
       );
     }
     if (await this.node.health()) {
@@ -52,7 +52,7 @@ export class NodeDistillingStore implements MemoryStore {
         `and only distilled statements reach the silo`);
     } else {
       this.log(
-        `warning: silo-node unreachable at ${this.node.url} — captures will buffer ` +
+        `warning: onesilo-node unreachable at ${this.node.url} — captures will buffer ` +
           `and retry until the node is up (raw transcripts are never sent)`
       );
     }

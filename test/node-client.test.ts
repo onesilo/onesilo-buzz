@@ -88,7 +88,7 @@ test("401 is a configuration error, not an unavailability", async () => {
     const client = new SiloNodeClient(url, "wrong");
     await assert.rejects(client.generate("p"), (err: Error) => {
       assert.ok(!(err instanceof NodeUnavailableError));
-      assert.match(err.message, /NODE_ADMIN_TOKEN|silo-node setup/);
+      assert.match(err.message, /NODE_ADMIN_TOKEN|onesilo-node setup/);
       return true;
     });
   } finally {

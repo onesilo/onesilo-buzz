@@ -4,6 +4,14 @@
   "description": "Prototype: gives Buzz (buzz.xyz) long-term memory powered by One Silo. A Buzz agent that ingests channel conversation into shared silos and answers with recalled context.",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onesilo/onesilo-buzz.git"
+  },
+  "bugs": {
+    "url": "https://github.com/onesilo/onesilo-buzz/issues"
+  },
+  "homepage": "https://github.com/onesilo/onesilo-buzz#readme",
   "engines": {
     "node": ">=22"
   },

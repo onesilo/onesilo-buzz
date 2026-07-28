@@ -123,7 +123,7 @@ if (config.silo.mode === "mcp") {
   store = new LocalSiloStore(config.silo.path);
 }
 
-// DISTILL_MODE=node: distill transcripts on a local silo-node so raw
+// DISTILL_MODE=node: distill transcripts on a local onesilo-node so raw
 // conversation never leaves this machine — only distilled statements sync.
 if (config.distill === "node") {
   store = wrapWithNodeDistillation(store, nodeAdmin, log);
@@ -137,7 +137,7 @@ const agent = new SiloMemoryAgent(relay, store, identity, {
 });
 
 async function main() {
-  // Node-key backfill: when ~/.silo-node/node.key isn't readable (or NODE_KEY
+  // Node-key backfill: when ~/.onesilo-node/node.key isn't readable (or NODE_KEY
   // unset), the admin API is the documented way to read it.
   const needsNodeKey = config.silo.mode === "relay" || config.silo.mode === "node";
   if (needsNodeKey && !nodeKeyRef.value) {

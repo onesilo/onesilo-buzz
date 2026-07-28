@@ -150,12 +150,12 @@ the next flush. Note the privacy posture this implies: **raw conversation
 transcripts from the agent's channels are sent to your silo** (not just
 distilled one-liners) — only add the agent to channels whose content
 belongs in that memory. If you'd rather raw conversation never leave your
-machine at all, run a silo-node and turn on private distillation (next
+machine at all, run a onesilo-node and turn on private distillation (next
 section).
 
-## Pairing with a silo-node
+## Pairing with a onesilo-node
 
-Run an open-source [silo-node](https://github.com/onesilo/onesilo-node) on
+Run an open-source [onesilo-node](https://github.com/onesilo/onesilo-node) on
 the same machine and the agent composes with it out of the box — two
 independent switches control where things run:
 
@@ -177,16 +177,16 @@ independent switches control where things run:
   you own.
 
 Both find the node automatically: LAN APIs at `127.0.0.1:8765`, node key
-from `~/.silo-node/node.key` or the admin API (`NODE_LAN_URL` / `NODE_KEY`
+from `~/.onesilo-node/node.key` or the admin API (`NODE_LAN_URL` / `NODE_KEY`
 override).
 
-**Private distillation with silo-node.** For workspaces that don't want raw
+**Private distillation with onesilo-node.** For workspaces that don't want raw
 transcripts leaving their hardware, pair the agent with a node on the same
 machine:
 
 ```bash
 # once, on the same machine (downloads a local model if needed):
-silo-node setup && silo-node
+onesilo-node setup && onesilo-node
 
 # then run the agent with:
 DISTILL_MODE=node npm start
@@ -196,16 +196,16 @@ With `DISTILL_MODE=node`, each conversation segment is distilled **by the
 node's local model** (via the node's admin API) into standalone memory
 statements — decisions, facts, action items, preferences — and only those
 statements sync to your silo. It works out of the box: the agent finds the
-node at `127.0.0.1:8766` and reads the admin token `silo-node setup` wrote
-to `~/.silo-node/admin.token`. If the node is down, captures buffer in the
+node at `127.0.0.1:8766` and reads the admin token `onesilo-node setup` wrote
+to `~/.onesilo-node/admin.token`. If the node is down, captures buffer in the
 turn window and retry until it's back — the agent **never** falls back to
 shipping raw transcripts; privacy degradation is not an automatic decision.
 
 | Path | What it is |
 | --- | --- |
 | `src/buzz/` | Nostr protocol surface: event parsing, agent identity, relay transport, and an in-process fake relay for demo/tests |
-| `src/silo/` | The `MemoryStore` contract with two backends: One Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use; `node-distill.ts` wraps either with silo-node private distillation |
-| `src/node/` | Client for a local silo-node's admin API (`/v1/compute/generate`) |
+| `src/silo/` | The `MemoryStore` contract with two backends: One Silo via MCP (`mcp-store.ts`, `mcp-client.ts`, `oauth.ts`) and a local JSON store for offline use; `node-distill.ts` wraps either with onesilo-node private distillation |
+| `src/node/` | Client for a local onesilo-node's admin API (`/v1/compute/generate`) |
 | `src/memory/` | Distillation heuristics and reply formatting |
 | `src/agent.ts` | The agent loop: routes events to ingest / commands / recall |
 | `src/connect.ts` | One-time OAuth pairing CLI |
@@ -250,11 +250,11 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `CAPTURE_WINDOW_TURNS` | `12` | Turns buffered before a segment flushes |
 | `CAPTURE_OVERLAP_TURNS` | `2` | Turns carried into the next segment as context |
 | `CAPTURE_IDLE_FLUSH_SECONDS` | `600` | Quiet time that closes an episode |
-| `DISTILL_MODE` | `cloud` | `cloud` (silo distills raw segments) or `node` (a local silo-node distills; only statements leave the machine) |
-| `NODE_URL` | `http://127.0.0.1:8766` | silo-node admin API (distillation, status) |
-| `NODE_ADMIN_TOKEN` | *(from `~/.silo-node/admin.token`)* | Explicit node admin token override |
-| `NODE_LAN_URL` | `http://127.0.0.1:8765` | silo-node LAN API (memory, `/v1/cloud` relay) |
-| `NODE_KEY` | *(from `~/.silo-node/node.key` or admin API)* | Explicit node key override |
+| `DISTILL_MODE` | `cloud` | `cloud` (silo distills raw segments) or `node` (a local onesilo-node distills; only statements leave the machine) |
+| `NODE_URL` | `http://127.0.0.1:8766` | onesilo-node admin API (distillation, status) |
+| `NODE_ADMIN_TOKEN` | *(from `~/.onesilo-node/admin.token`)* | Explicit node admin token override |
+| `NODE_LAN_URL` | `http://127.0.0.1:8765` | onesilo-node LAN API (memory, `/v1/cloud` relay) |
+| `NODE_KEY` | *(from `~/.onesilo-node/node.key` or admin API)* | Explicit node key override |
 | `NODE_ALLOW_REMOTE` | *(unset)* | Set `1` to allow a non-loopback node URL (requires https) |
 | `AGENT_SECRET_KEY_PATH` | `.silo/agent.key` | Where a freshly generated agent key is written (0600) |
 

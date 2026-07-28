@@ -1,5 +1,5 @@
 /**
- * Client for a local silo-node (https://github.com/onesilo/onesilo-node).
+ * Client for a local onesilo-node (https://github.com/onesilo/onesilo-node).
  *
  * The node's admin API serves POST /v1/compute/generate: one-shot text
  * generation on the node's own Ollama-backed model. The agent uses it to
@@ -8,7 +8,7 @@
  * distilled memory statements do.
  *
  * Out-of-the-box pairing: the node's admin API listens on 127.0.0.1:8766
- * and `silo-node setup` writes its token to ~/.silo-node/admin.token, so an
+ * and `onesilo-node setup` writes its token to ~/.onesilo-node/admin.token, so an
  * agent running on the same machine needs zero configuration.
  */
 
@@ -23,7 +23,7 @@ import { join } from "node:path";
  */
 export class NodeUnavailableError extends Error {
   constructor(detail: string) {
-    super(`silo-node unavailable: ${detail}`);
+    super(`onesilo-node unavailable: ${detail}`);
   }
 }
 
@@ -32,11 +32,11 @@ export interface NodeGenerateResult {
   model: string;
 }
 
-/** Where `silo-node setup` persists the admin token. */
-export const DEFAULT_NODE_TOKEN_PATH = join(homedir(), ".silo-node", "admin.token");
+/** Where `onesilo-node setup` persists the admin token. */
+export const DEFAULT_NODE_TOKEN_PATH = join(homedir(), ".onesilo-node", "admin.token");
 
 /** Where the node generates its memory/relay API key on first start. */
-export const DEFAULT_NODE_KEY_PATH = join(homedir(), ".silo-node", "node.key");
+export const DEFAULT_NODE_KEY_PATH = join(homedir(), ".onesilo-node", "node.key");
 
 /**
  * Resolve the node admin token: explicit env value first, then the token
@@ -101,7 +101,7 @@ export class SiloNodeClient {
 
   /**
    * The node key from admin GET /v1/status (the documented way to read it).
-   * Fallback for when ~/.silo-node/node.key isn't readable directly.
+   * Fallback for when ~/.onesilo-node/node.key isn't readable directly.
    */
   async nodeKey(): Promise<string> {
     const res = await this.fetch(
@@ -110,7 +110,7 @@ export class SiloNodeClient {
       5_000
     );
     if (!res.ok) {
-      throw new Error(`silo-node status failed (${res.status}): ${await errorDetail(res)}`);
+      throw new Error(`onesilo-node status failed (${res.status}): ${await errorDetail(res)}`);
     }
     const body = (await res.json()) as { node_key?: string };
     return body.node_key ?? "";
@@ -137,16 +137,16 @@ export class SiloNodeClient {
     }
     if (res.status === 401) {
       throw new Error(
-        `silo-node rejected the admin token (401). Set NODE_ADMIN_TOKEN or run ` +
-          `\`silo-node setup\` so ${DEFAULT_NODE_TOKEN_PATH} exists.`
+        `onesilo-node rejected the admin token (401). Set NODE_ADMIN_TOKEN or run ` +
+          `\`onesilo-node setup\` so ${DEFAULT_NODE_TOKEN_PATH} exists.`
       );
     }
     if (!res.ok) {
-      throw new Error(`silo-node generate failed (${res.status}): ${await errorDetail(res)}`);
+      throw new Error(`onesilo-node generate failed (${res.status}): ${await errorDetail(res)}`);
     }
     const body = (await res.json()) as { text?: string; model?: string };
     if (typeof body.text !== "string") {
-      throw new Error("silo-node generate returned no text");
+      throw new Error("onesilo-node generate returned no text");
     }
     return { text: body.text, model: body.model ?? "unknown" };
   }

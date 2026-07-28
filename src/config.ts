@@ -12,23 +12,23 @@ export interface Config {
     idleFlushMs: number;
   };
   /**
-   * A local silo-node's endpoints and credentials, shared by every
+   * A local onesilo-node's endpoints and credentials, shared by every
    * node-facing feature (DISTILL_MODE=node, SILO_MODE=relay|node).
-   * Defaults match `silo-node setup` on the same machine.
+   * Defaults match `onesilo-node setup` on the same machine.
    */
   node: {
     /** Admin API origin (compute/generate, status). */
     adminUrl: string;
-    /** Explicit admin token; empty = read ~/.silo-node/admin.token. */
+    /** Explicit admin token; empty = read ~/.onesilo-node/admin.token. */
     adminToken?: string;
     /** LAN API origin (memory API, /v1/cloud relay). */
     lanUrl: string;
-    /** Explicit node key; empty = read ~/.silo-node/node.key. */
+    /** Explicit node key; empty = read ~/.onesilo-node/node.key. */
     key?: string;
   };
   /**
    * Where transcript distillation happens. "cloud": segments go to the silo
-   * raw and One Silo's pipeline distills them. "node": a local silo-node
+   * raw and One Silo's pipeline distills them. "node": a local onesilo-node
    * distills first and only distilled statements leave the machine.
    */
   distill: "cloud" | "node";
@@ -47,7 +47,7 @@ export interface Config {
       }
     | {
         /**
-         * One Silo through a gateway silo-node's /v1/cloud/mcp relay: the
+         * One Silo through a gateway onesilo-node's /v1/cloud/mcp relay: the
          * node holds the only cloud credential; the agent authenticates to
          * the node with the node key and never pairs itself.
          */
@@ -57,7 +57,7 @@ export interface Config {
       }
     | {
         /**
-         * Memory served entirely by a local silo-node's memory API — the
+         * Memory served entirely by a local onesilo-node's memory API — the
          * fully on-machine stack when combined with DISTILL_MODE=node.
          */
         mode: "node";
