@@ -23,7 +23,7 @@ export interface OAuthLike {
 
 /**
  * Pluggable request auth: the cloud MCP endpoint wants an OAuth bearer
- * token; a gateway silo-node's relay (/v1/cloud/mcp) wants the node key.
+ * token; a gateway onesilo-node's relay (/v1/cloud/mcp) wants the node key.
  */
 export interface McpAuth {
   headers(): Promise<Record<string, string>>;

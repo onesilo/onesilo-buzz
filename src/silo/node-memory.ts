@@ -1,5 +1,5 @@
 /**
- * MemoryStore backed by a local silo-node's memory API (SILO_MODE=node):
+ * MemoryStore backed by a local onesilo-node's memory API (SILO_MODE=node):
  * silos homed on hardware the operator owns, SQLite + FTS5 keyword search,
  * fused with vector recall when the node's compute capability is on.
  *
@@ -50,7 +50,7 @@ export class NodeMemoryStore implements MemoryStore {
   async init(): Promise<void> {
     if (!this.nodeKey()) {
       this.log(
-        `warning: no node key found — set NODE_KEY or check ~/.silo-node/node.key; ` +
+        `warning: no node key found — set NODE_KEY or check ~/.onesilo-node/node.key; ` +
           `memory calls will fail until fixed`
       );
     }
@@ -63,7 +63,7 @@ export class NodeMemoryStore implements MemoryStore {
       );
     } catch (err) {
       this.log(
-        `warning: silo-node memory unreachable at ${this.baseUrl} (${err}) — ` +
+        `warning: onesilo-node memory unreachable at ${this.baseUrl} (${err}) — ` +
           `captures will fail until the node is up (enable capabilities.memory)`
       );
     }
@@ -194,7 +194,7 @@ export class NodeMemoryStore implements MemoryStore {
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch (err) {
-      throw new Error(`silo-node memory unreachable at ${this.baseUrl}: ${err}`);
+      throw new Error(`onesilo-node memory unreachable at ${this.baseUrl}: ${err}`);
     }
     if (!res.ok) {
       let detail = res.statusText;
@@ -203,7 +203,7 @@ export class NodeMemoryStore implements MemoryStore {
       } catch {
         // non-JSON error body
       }
-      throw new Error(`silo-node memory ${method} ${path} (${res.status}): ${detail}`);
+      throw new Error(`onesilo-node memory ${method} ${path} (${res.status}): ${detail}`);
     }
     try {
       return await res.json();
