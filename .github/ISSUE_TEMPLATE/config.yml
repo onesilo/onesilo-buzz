@@ -3,6 +3,12 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/onesilo/onesilo-buzz/security/policy
     about: Do not open a public issue. Email security@onesilo.com — see SECURITY.md.
-  - name: Question or idea
-    url: https://github.com/onesilo/onesilo-buzz/discussions
-    about: Setup help, design discussion, and anything not yet a concrete bug.
+  # Setup questions mostly resolve in the README and .env.example, which
+  # document every mode and every setting. Point here rather than at
+  # /discussions while Discussions is disabled on this repository — a dead
+  # link in the issue chooser is worse than no link. Once Discussions is
+  # enabled, switch this to
+  # https://github.com/onesilo/onesilo-buzz/discussions
+  - name: Setup help and configuration
+    url: https://github.com/onesilo/onesilo-buzz#readme
+    about: Start with the README and .env.example — they cover every mode and setting.

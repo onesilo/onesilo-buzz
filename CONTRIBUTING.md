@@ -8,9 +8,15 @@ layout, the rules that keep it safe, and how to get a change merged.
 ```bash
 git clone https://github.com/onesilo/onesilo-buzz
 cd onesilo-buzz
-npm install
+npm ci
 npm run lint && npm test
 ```
+
+`npm ci` rather than `npm install`, matching CI: it installs exactly what
+`package-lock.json` pins and fails if the lockfile and `package.json`
+disagree, so drift surfaces locally instead of on a pull request. Use
+`npm install` only when you are deliberately adding or upgrading a
+dependency, and commit the resulting lockfile change.
 
 Node 22 or newer (`engines.node` in `package.json` sets the floor). The
 test suite needs no network, no account, and no running node — the Buzz
