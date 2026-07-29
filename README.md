@@ -109,9 +109,12 @@ Flags: `--yes` takes the recommended answer to every prompt, `--no-node`
 skips the node question entirely. Setting `DISTILL_MODE` yourself disables
 the question too.
 
-The Homebrew tap is not published yet — until it is, install from a
-checkout with `npm install && npm run cli -- run`, or
-`brew install --build-from-source ./packaging/homebrew/silo-buzz.rb`.
+The tap ([onesilo/homebrew-tap](https://github.com/onesilo/homebrew-tap)) is
+live, but its formula builds from a published npm tarball, so `brew install
+silo-buzz` only works once `@onesilo/buzz-silo-memory` is on the registry.
+Until then, run from a checkout: `npm install && npm run cli -- run`.
+(`packaging/homebrew/silo-buzz.rb` is a stale copy of the tap's formula and
+cannot be installed — its `sha256` is a placeholder.)
 
 ### 1. Try the demo — no account, no infrastructure
 
@@ -170,8 +173,10 @@ prints its **npub** (for pasting into a client) and its **hex pubkey** (for
 relay admin tooling) once it is live, along with the `buzz-admin add-member`
 command a member-restricted relay needs — that one is easy to miss, because
 a restricted relay does not reject the agent visibly, it just never delivers
-anything to it. `npm start` prints the pubkey only; pin the identity with
-`AGENT_SECRET_KEY` in `.env`.
+anything to it. `npm start` logs only the first 12 characters of the pubkey —
+enough to recognise the agent in the log, not enough to admit it — so use
+`silo-buzz run` (or `silo-buzz connect`) when you need the real values. Pin
+the identity with `AGENT_SECRET_KEY` in `.env`.
 
 ## How it works
 

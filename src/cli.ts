@@ -231,11 +231,25 @@ async function main(): Promise<void> {
 // Only run when invoked as the program, not when imported. Tests import
 // `runCommand` directly; without this guard, importing the module would
 // execute `main()` against the test runner's own argv.
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+//
+// The comparison is wrapped because this runs at module scope, where a throw
+// is uncatchable by whoever imported us — it would take down the importer
+// rather than this guard. `pathToFileURL` resolves a relative argv[1] against
+// the cwd, so it can fail when there is no usable cwd (the directory was
+// deleted under a running shell). Treating that as "not invoked directly" is
+// the safe reading: the only cost is a no-op import, whereas guessing the
+// other way runs `main()` inside a test process.
+function isInvokedDirectly(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href;
+  } catch {
+    return false;
+  }
+}
 
-if (invokedDirectly) {
+if (isInvokedDirectly()) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);

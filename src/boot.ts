@@ -213,19 +213,27 @@ export async function startAgent(opts: BootOptions): Promise<RunningAgent> {
     }
   }
 
-  // Scope discovery first: logs the connection's silos/shapes and warns on
-  // buckets the connection can't reach.
-  if (store.init) await store.init();
-  await agent.start();
-
   // Graceful shutdown on both Ctrl-C and supervisor stops (Docker/Kubernetes/
   // systemd send SIGTERM): flush pending conversation buffers, then close.
   // A second signal during the flush must not restart it.
+  //
+  // Registered BEFORE startup, not after. Scope discovery and the relay
+  // connect can take seconds against a slow silo, and a signal arriving in
+  // that window used to hit Node's default disposition — the process died
+  // outright and anything already buffered went with it. `startup` is what
+  // makes early registration safe: the handler waits for an in-flight start
+  // instead of racing relay.close() against relay.connect().
   let shuttingDown = false;
+  let startup: Promise<void> | null = null;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`${signal} received — flushing pending captures`);
+    if (startup) {
+      // A startup that is itself failing still needs tearing down, so the
+      // rejection is swallowed here — boot's caller already sees it.
+      await startup.catch(() => {});
+    }
     // Stop intake FIRST: events delivered during the final flush would land
     // in the window after it and be dropped silently on exit. Closing the
     // relay before stop() means already-queued command replies may fail
@@ -242,6 +250,16 @@ export async function startAgent(opts: BootOptions): Promise<RunningAgent> {
   process.on("SIGINT", () => void shutdown("SIGINT").finally(() => process.exit(0)));
   process.on("SIGTERM", () => void shutdown("SIGTERM").finally(() => process.exit(0)));
 
-  opts.onStarted?.(identity);
+  // Scope discovery first: logs the connection's silos/shapes and warns on
+  // buckets the connection can't reach.
+  startup = (async () => {
+    if (store.init) await store.init();
+    await agent.start();
+  })();
+  await startup;
+
+  // A signal during startup means the handler is already flushing and about
+  // to exit; announcing the agent as online on the way out is just noise.
+  if (!shuttingDown) opts.onStarted?.(identity);
   return { identity, shutdown };
 }
