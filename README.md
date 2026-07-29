@@ -113,8 +113,6 @@ The tap ([onesilo/homebrew-tap](https://github.com/onesilo/homebrew-tap)) is
 live, but its formula builds from a published npm tarball, so `brew install
 silo-buzz` only works once `@onesilo/buzz-silo-memory` is on the registry.
 Until then, run from a checkout: `npm install && npm run cli -- run`.
-(`packaging/homebrew/silo-buzz.rb` is a stale copy of the tap's formula and
-cannot be installed — its `sha256` is a placeholder.)
 
 ### 1. Try the demo — no account, no infrastructure
 
