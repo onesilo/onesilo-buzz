@@ -9,7 +9,12 @@
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadConfig } from "./config.js";
-import { loadIdentity, exportSecretKeyHex, resolveAgentSecretKeyHex } from "./buzz/identity.js";
+import {
+  loadIdentity,
+  exportSecretKeyHex,
+  resolveAgentSecretKeyHex,
+  npubOf,
+} from "./buzz/identity.js";
 import { WebSocketRelay } from "./buzz/relay.js";
 import { LocalSiloStore } from "./silo/local.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
@@ -33,7 +38,7 @@ const keyPath = process.env.AGENT_SECRET_KEY_PATH ?? ".silo/agent.key";
 const resolvedSecret = resolveAgentSecretKeyHex(config.agentSecretKeyHex, keyPath);
 const identity = loadIdentity(config.agentHandle, resolvedSecret.hex);
 if (resolvedSecret.fromFile) {
-  log(`Loaded agent identity from ${keyPath} (pubkey ${identity.pubkey.slice(0, 12)}…).`);
+  log(`Loaded agent identity from ${keyPath}.`);
 } else if (!resolvedSecret.hex) {
   // A freshly generated key is the agent's signing identity — a genuine
   // secret. Never print it to stdout, where it would be captured by log
@@ -56,9 +61,9 @@ if (resolvedSecret.fromFile) {
       /* best effort */
     }
     log(
-      `Generated a new agent identity (pubkey ${identity.pubkey.slice(0, 12)}…). ` +
-        `Wrote its secret key to ${keyPath} (0600); it will be loaded automatically ` +
-        `on the next start. Keep that file to preserve this identity.`
+      `Generated a new agent identity. Wrote its secret key to ${keyPath} (0600); ` +
+        `it will be loaded automatically on the next start. Keep that file to ` +
+        `preserve this identity.`
     );
   } catch (err) {
     // The write itself failed — the key is not on disk. Only reveal it on an
@@ -75,6 +80,15 @@ if (resolvedSecret.fromFile) {
     }
   }
 }
+
+// The agent joins channels like any other Buzz member, which means a human
+// has to add its public key to them. Print the identity in full, in both
+// the hex and bech32 (npub) forms clients use, so that step doesn't require
+// digging the key file out and deriving it by hand. Public keys are not
+// secret — only the secret key is, and that is never printed.
+log(`Agent @${identity.handle} — add this member to your Buzz channels:`);
+log(`  npub: ${npubOf(identity.pubkey)}`);
+log(`  hex:  ${identity.pubkey}`);
 
 // Node key for the LAN APIs (memory, cloud relay): env/file first; if
 // neither exists, main() backfills it from the admin API before startup.

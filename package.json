@@ -17,8 +17,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "tsx src/index.ts",
-    "connect": "tsx src/connect.ts",
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "connect": "tsx --env-file-if-exists=.env src/connect.ts",
     "demo": "tsx demo/demo.ts",
     "test": "tsx --test test/*.test.ts",
     "lint": "tsc --noEmit"

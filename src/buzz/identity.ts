@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { generateSecretKey, getPublicKey } from "nostr-tools";
+import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 
 export interface AgentIdentity {
@@ -73,6 +73,15 @@ export function loadIdentity(
     ? hexToBytes(secretKeyHex)
     : generateSecretKey();
   return { secretKey, pubkey: getPublicKey(secretKey), handle };
+}
+
+/**
+ * The agent's public key in bech32 `npub` form — how Buzz and other Nostr
+ * clients identify a member in their UI. Public by construction (derived
+ * from the pubkey, never the secret), so it is safe to log.
+ */
+export function npubOf(pubkey: string): string {
+  return nip19.npubEncode(pubkey);
 }
 
 export function exportSecretKeyHex(identity: AgentIdentity): string {

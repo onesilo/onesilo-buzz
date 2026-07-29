@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveAgentSecretKeyHex } from "../src/buzz/identity.js";
+import { nip19 } from "nostr-tools";
+import { resolveAgentSecretKeyHex, loadIdentity, npubOf } from "../src/buzz/identity.js";
 
 const VALID = "a".repeat(64); // 64 hex chars
 
@@ -50,4 +51,13 @@ test("an unreadable key file throws rather than being overwritten", () => {
 
 test("a malformed AGENT_SECRET_KEY env throws a clear error", () => {
   assert.throws(() => resolveAgentSecretKeyHex("too-short", "/nonexistent"), /64 hex characters/);
+});
+
+test("npubOf encodes the pubkey in bech32 npub form", () => {
+  // The boot banner prints this so a human can add the agent to a channel
+  // without deriving it from the key file by hand.
+  const identity = loadIdentity("silo", "a".repeat(64));
+  const npub = npubOf(identity.pubkey);
+  assert.match(npub, /^npub1[a-z0-9]+$/);
+  assert.equal(nip19.decode(npub).data, identity.pubkey);
 });

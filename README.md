@@ -110,8 +110,24 @@ touch. Pairing is one-time; refresh tokens keep the agent running headlessly.
 npm start
 ```
 
-Add the agent's pubkey to your Buzz channels like any other member (it
-prints its pubkey on first boot — pin it with `AGENT_SECRET_KEY` in `.env`).
+On every boot the agent prints its public key in both forms Buzz clients
+use:
+
+```
+[silo-memory] Agent @silo — add this member to your Buzz channels:
+[silo-memory]   npub: npub1dgz2hxxeu3m54kqxuvpdmh4k804pddwttu3raem50r5xrw6c86es…
+[silo-memory]   hex:  6a04ab98d9e4774ad806e302dddeb63bea16b5cb5f223ee774…
+```
+
+Add that member to each channel you want it to remember, exactly as you'd
+add a coworker. The agent only sees channels it has been added to, and it
+never speaks unless spoken to (`@silo …`, `!recall`, `!remember`).
+
+The identity is stable across restarts — the secret key is persisted to
+`.silo/agent.key` (mode `0600`) on first run and reloaded automatically, so
+the npub you add stays valid. Keep that file; losing it means a new identity
+and re-adding the agent everywhere. `AGENT_SECRET_KEY` overrides it if you'd
+rather supply the key yourself.
 
 ## How it works
 
@@ -235,6 +251,10 @@ Memory lives in **silos**, and one agent isn't limited to one:
 ## Configuration
 
 Everything is environment-driven — see [`.env.example`](.env.example).
+`npm start` and `npm run connect` read a `.env` in the repo root; variables
+already set in your shell take precedence over the file. (`npm run demo` and
+`npm test` deliberately ignore `.env` — they run on defaults so a broken
+config can't make the offline paths fail.)
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
