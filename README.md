@@ -64,6 +64,55 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ## Quick start
 
+```bash
+brew tap onesilo/tap
+brew install silo-buzz
+silo-buzz run
+```
+
+`run` walks the whole setup: it offers to install a
+[onesilo-node](https://github.com/onesilo/onesilo-node) so conversation is
+distilled on your own machine, hands off to the node's setup wizard, starts
+the agent, and prints the npub to add to your channels.
+
+```
+Install onesilo-node so that memory is retained on this machine? [Y/n] y
+[silo-buzz] Installing onesilo-node with Homebrew (builds from source; this can take a few minutes)…
+[silo-buzz] Starting the onesilo-node setup wizard — it will ask a few questions.
+   ... the node's wizard runs ...
+[silo-buzz] Starting the node…
+[silo-buzz] Node is up — distillation will run on this machine.
+
+  ─────────────────────────────────────────────────────────────────
+  The agent is running. One step left: let it into your workspace.
+  ─────────────────────────────────────────────────────────────────
+
+  Agent      @silo
+  npub       npub1w7v9x2m...
+  pubkey     7ae615cadb...
+  relay      wss://onesilo.communities.buzz.xyz
+```
+
+Answering **n** runs without a node: the agent still works, but raw
+transcripts are sent to your silo for distillation rather than staying on
+your machine. That choice is asked rather than assumed, and if you say yes
+and the install fails, `run` stops instead of quietly doing the opposite.
+
+A node started this way lives exactly as long as `silo-buzz` — it is a
+child process, not a background service. Nothing is installed into launchd
+or systemd, and nothing keeps holding a tunnel open after you quit. If you
+want a node that runs on its own schedule, run `onesilo-node` yourself (or
+use [Silo Desktop](https://onesilo.com)); `silo-buzz run` detects one that
+is already answering and leaves it alone.
+
+Flags: `--yes` takes the recommended answer to every prompt, `--no-node`
+skips the node question entirely. Setting `DISTILL_MODE` yourself disables
+the question too.
+
+The Homebrew tap is not published yet — until it is, install from a
+checkout with `npm install && npm run cli -- run`, or
+`brew install --build-from-source ./packaging/homebrew/silo-buzz.rb`.
+
 ### 1. Try the demo — no account, no infrastructure
 
 ```bash
@@ -113,11 +162,16 @@ backfilled.
 ### 4. Run it in your workspace
 
 ```bash
-npm start
+npm start          # or: silo-buzz run
 ```
 
-Add the agent's pubkey to your Buzz channels like any other member (it
-prints its pubkey on first boot — pin it with `AGENT_SECRET_KEY` in `.env`).
+Add the agent to your Buzz channels like any other member. `silo-buzz run`
+prints its **npub** (for pasting into a client) and its **hex pubkey** (for
+relay admin tooling) once it is live, along with the `buzz-admin add-member`
+command a member-restricted relay needs — that one is easy to miss, because
+a restricted relay does not reject the agent visibly, it just never delivers
+anything to it. `npm start` prints the pubkey only; pin the identity with
+`AGENT_SECRET_KEY` in `.env`.
 
 ## How it works
 
