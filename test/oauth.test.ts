@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertSameSecureOrigin, validateDiscoveredEndpoints } from "../src/silo/oauth.js";
+import {
+  assertSameSecureOrigin,
+  validateDiscoveredEndpoints,
+  buildAuthorizeUrl,
+} from "../src/silo/oauth.js";
 
 const ISSUER = "https://api.onesilo.com";
 
@@ -82,4 +86,34 @@ test("discovery validation still rejects a cross-origin token_endpoint", () => {
       }),
     /not same-origin/
   );
+});
+
+test("the authorize request asks for offline_access", () => {
+  // Without this the control plane issues no refresh token
+  // (app/services/oauth_server.py: `if "offline_access" in scope`) and the
+  // agent silently stops working when its access token expires. Pairing
+  // still succeeds without it, so nothing else catches the omission.
+  const url = buildAuthorizeUrl("https://connect.onesilo.com/oauth/authorize", {
+    clientId: "client-123",
+    redirectUri: "http://127.0.0.1:8765/callback",
+    codeChallenge: "challenge",
+    state: "state",
+  });
+  assert.equal(url.searchParams.get("scope"), "offline_access");
+});
+
+test("the authorize request carries PKCE and the loopback redirect", () => {
+  const url = buildAuthorizeUrl("https://connect.onesilo.com/oauth/authorize", {
+    clientId: "client-123",
+    redirectUri: "http://127.0.0.1:8765/callback",
+    codeChallenge: "the-challenge",
+    state: "the-state",
+  });
+  assert.equal(url.origin + url.pathname, "https://connect.onesilo.com/oauth/authorize");
+  assert.equal(url.searchParams.get("response_type"), "code");
+  assert.equal(url.searchParams.get("client_id"), "client-123");
+  assert.equal(url.searchParams.get("redirect_uri"), "http://127.0.0.1:8765/callback");
+  assert.equal(url.searchParams.get("code_challenge"), "the-challenge");
+  assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(url.searchParams.get("state"), "the-state");
 });

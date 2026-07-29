@@ -104,6 +104,12 @@ One Silo. The agent then appears in your dashboard under
 revoke access, set rate limits, require approvals, scope which silos it can
 touch. Pairing is one-time; refresh tokens keep the agent running headlessly.
 
+If `connect` reports that no refresh token came back, the agent will stop
+working when its current access token expires — re-run `npm run connect`
+against a build that requests `offline_access`. Agents paired before that
+scope was requested need to re-pair once; a missing refresh token cannot be
+backfilled.
+
 ### 4. Run it in your workspace
 
 ```bash

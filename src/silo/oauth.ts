@@ -8,6 +8,11 @@
  * Headless pairing: `npm run connect` prints the authorize URL; the agent's
  * human sponsor approves once in a browser (the loopback redirect catches
  * the code), and from then on the refresh token keeps the agent alive.
+ * That last part depends on asking for `offline_access` at authorize time —
+ * the control plane mints a refresh token only when the scope requests one
+ * (app/services/oauth_server.py: `if "offline_access" in scope`), so an
+ * authorize request with no scope pairs successfully and then dies silently
+ * when the access token expires.
  *
  * DCR metadata: client_name "Buzz Agent (@handle)" and client_uri
  * "https://buzz.xyz" identify the connection as a Buzz agent in the
@@ -115,6 +120,40 @@ export function assertSameSecureOrigin(name: string, issuer: string, endpoint: s
   }
 }
 
+/**
+ * Scopes requested at authorize time. `offline_access` is the load-bearing
+ * one: without it the control plane issues an access token and no refresh
+ * token, so a paired agent works until that token expires and then needs a
+ * human to re-run `npm run connect` — which defeats the point of a headless
+ * agent. Nothing beyond it is requested: the agent acts on its own
+ * connection, and its silo access is granted in the dashboard rather than
+ * through OAuth scopes, so `profile`/`email` would be data we neither need
+ * nor want to hold.
+ */
+export const AGENT_OAUTH_SCOPE = "offline_access";
+
+/**
+ * Build the authorization request URL (authorization_code + PKCE).
+ * Exported for tests — the scope is easy to drop and impossible to notice,
+ * since omitting it still pairs successfully.
+ */
+export function buildAuthorizeUrl(
+  authorizationEndpoint: string,
+  params: { clientId: string; redirectUri: string; codeChallenge: string; state: string }
+): URL {
+  const url = new URL(authorizationEndpoint);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: params.clientId,
+    redirect_uri: params.redirectUri,
+    code_challenge: params.codeChallenge,
+    code_challenge_method: "S256",
+    state: params.state,
+    scope: AGENT_OAUTH_SCOPE,
+  }).toString();
+  return url;
+}
+
 export class SiloOAuthClient {
   private creds?: StoredCredentials;
   private metadata?: ServerMetadata;
@@ -197,15 +236,12 @@ export class SiloOAuthClient {
     const challenge = b64url(createHash("sha256").update(verifier).digest());
     const state = b64url(randomBytes(16));
 
-    const authUrl = new URL(meta.authorization_endpoint);
-    authUrl.search = new URLSearchParams({
-      response_type: "code",
-      client_id: creds.client_id,
-      redirect_uri: this.redirectUri(),
-      code_challenge: challenge,
-      code_challenge_method: "S256",
+    const authUrl = buildAuthorizeUrl(meta.authorization_endpoint, {
+      clientId: creds.client_id,
+      redirectUri: this.redirectUri(),
+      codeChallenge: challenge,
       state,
-    }).toString();
+    });
 
     log(`\nOpen this URL to authorize the Buzz agent (one-time):\n\n  ${authUrl}\n`);
 
@@ -216,7 +252,18 @@ export class SiloOAuthClient {
       code_verifier: verifier,
       redirect_uri: this.redirectUri(),
     });
-    log("Paired. The agent now appears in the One Silo dashboard under Connections.");
+    if (this.canRefresh) {
+      log("Paired. The agent now appears in the One Silo dashboard under Connections.");
+    } else {
+      // Surface it here rather than letting `npm start` discover it later:
+      // the authorization the human just granted is the thing that came back
+      // short, so this is the moment they can act on it.
+      log(
+        "Paired, but the control plane returned no refresh token — the agent " +
+          "will stop working when this access token expires. It appears in the " +
+          "One Silo dashboard under Connections either way."
+      );
+    }
   }
 
   private waitForCallback(expectedState: string): Promise<string> {
