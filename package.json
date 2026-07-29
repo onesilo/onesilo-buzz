@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Prototype: gives Buzz (buzz.xyz) long-term memory powered by One Silo. A Buzz agent that ingests channel conversation into shared silos and answers with recalled context.",
   "type": "module",
+  "bin": {
+    "silo-buzz": "dist/src/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -18,6 +26,7 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
+    "cli": "tsx src/cli.ts",
     "connect": "tsx src/connect.ts",
     "demo": "tsx demo/demo.ts",
     "test": "tsx --test test/*.test.ts",
