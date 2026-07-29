@@ -149,6 +149,25 @@ test("--no-node skips the node entirely", async () => {
   }
 });
 
+// A flag typed on this invocation beats an environment variable that is
+// usually sitting in a .env from an earlier session. The old order returned
+// on DISTILL_MODE first, so this combination ran node distillation and
+// ignored the flag entirely.
+test("--no-node overrides an explicit DISTILL_MODE=node", async () => {
+  const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
+  const prev = process.env.DISTILL_MODE;
+  process.env.DISTILL_MODE = "node";
+  try {
+    const env = { ...process.env, DISTILL_MODE: "node" };
+    const mode = await resolveDistillMode(loadConfig(env), parseFlags(["--no-node"]), runner);
+    assert.equal(mode, "cloud");
+    assert.deepEqual(runner.calls, []); // no detect, no install, no setup
+  } finally {
+    if (prev === undefined) delete process.env.DISTILL_MODE;
+    else process.env.DISTILL_MODE = prev;
+  }
+});
+
 test("without Homebrew the run aborts instead of distilling in the cloud", async () => {
   // This is the important one. The operator said yes to keeping transcripts
   // on this machine; failing to install a node must not silently produce the
