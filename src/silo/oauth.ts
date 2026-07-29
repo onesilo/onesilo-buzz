@@ -20,7 +20,7 @@ import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "n
 import { dirname } from "node:path";
 
 export interface OAuthConfig {
-  /** Control-plane origin, e.g. https://api.onesilo.com */
+  /** Control-plane origin, e.g. https://connect.onesilo.com */
   serverUrl: string;
   /** Agent handle, used in client_name so the dashboard shows who this is. */
   agentHandle: string;

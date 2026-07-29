@@ -47,3 +47,28 @@ test("NODE_ALLOW_REMOTE still rejects plaintext http to a remote host", () => {
     /plaintext/
   );
 });
+
+test("mcp mode defaults to the control plane, not the data plane", () => {
+  // The OAuth discovery document mints its issuer and endpoints from the
+  // control-plane origin, and src/silo/oauth.ts requires the discovered
+  // endpoints to be same-origin as the URL discovery was fetched from.
+  // Defaulting to the data plane (api.onesilo.com) therefore makes
+  // `npm run connect` fail on every fresh checkout.
+  const cfg = loadConfig({ SILO_MODE: "mcp" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.silo.mode, "mcp");
+  assert.equal(
+    cfg.silo.mode === "mcp" ? cfg.silo.serverUrl : undefined,
+    "https://connect.onesilo.com"
+  );
+});
+
+test("SILO_SERVER_URL overrides the control-plane default", () => {
+  const cfg = loadConfig({
+    SILO_MODE: "mcp",
+    SILO_SERVER_URL: "https://connect.staging.onesilo.com",
+  } as NodeJS.ProcessEnv);
+  assert.equal(
+    cfg.silo.mode === "mcp" ? cfg.silo.serverUrl : undefined,
+    "https://connect.staging.onesilo.com"
+  );
+});

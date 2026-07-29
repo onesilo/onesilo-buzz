@@ -60,7 +60,7 @@ export class McpClient {
   private rpcId = 0;
 
   constructor(
-    /** Full MCP endpoint URL, e.g. https://api.onesilo.com/mcp */
+    /** Full MCP endpoint URL, e.g. https://connect.onesilo.com/mcp */
     private readonly url: string,
     auth: OAuthLike | McpAuth,
     private readonly clientInfo = { name: "buzz-silo-memory", version: "0.1.0" }

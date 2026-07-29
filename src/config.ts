@@ -36,7 +36,7 @@ export interface Config {
     | { mode: "local"; path: string }
     | {
         mode: "mcp";
-        /** Control-plane origin, e.g. https://api.onesilo.com */
+        /** Control-plane origin, e.g. https://connect.onesilo.com */
         serverUrl: string;
         /** Default memory bucket; "default" = the connection's auto-provisioned silo. */
         siloId: string;
@@ -118,7 +118,12 @@ function siloConfig(
     case "mcp":
       return {
         mode,
-        serverUrl: env.SILO_SERVER_URL ?? "https://api.onesilo.com",
+        // The control plane, not the data plane. OAuth discovery and the MCP
+        // endpoint are both served here, and the discovery document's issuer
+        // and endpoints are minted from this origin — pointing at the data
+        // plane (api.onesilo.com) makes the same-origin check in
+        // silo/oauth.ts reject the discovered endpoints.
+        serverUrl: env.SILO_SERVER_URL ?? "https://connect.onesilo.com",
         siloId: env.SILO_ID ?? "default",
         channelMap: env.SILO_CHANNEL_MAP ?? "",
         tokenPath: env.SILO_TOKEN_PATH ?? ".silo/oauth.json",
