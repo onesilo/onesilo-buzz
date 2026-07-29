@@ -243,7 +243,7 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `AGENT_HANDLE` | `silo` | The agent's @handle |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
 | `SILO_MODE` | `mcp` | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
-| `SILO_SERVER_URL` | `https://api.onesilo.com` | Silo control plane |
+| `SILO_SERVER_URL` | `https://connect.onesilo.com` | Silo control plane (OAuth + MCP) |
 | `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
 | `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |
 | `SILO_TOKEN_PATH` | `.silo/oauth.json` | Where OAuth tokens persist |
