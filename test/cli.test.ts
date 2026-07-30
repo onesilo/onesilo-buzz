@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -231,7 +231,14 @@ test("parseFlags recognises both spellings of --yes", () => {
 // Running from a checkout compared two identical real paths, so nothing here
 // caught it. These assertions are about the symlink case specifically.
 test("isEntrypoint resolves argv[1] through a symlink", () => {
-  const dir = mkdtempSync(join(tmpdir(), "onesilo-buzz-entry-"));
+  // realpath the temp dir before building any path from it. On macOS
+  // os.tmpdir() is /var/folders/... where /var is itself a symlink to
+  // /private/var, so a raw path and its realpath differ — and the assertions
+  // below would compare file:///var/... against file:///private/var/... and
+  // fail for a reason that has nothing to do with the bin symlink under test.
+  // Node always hands out a canonical import.meta.url, so canonicalising here
+  // is also the faithful model of the real thing.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "onesilo-buzz-entry-")));
   try {
     const real = join(dir, "cli.js");
     const link = join(dir, "onesilo-buzz");
