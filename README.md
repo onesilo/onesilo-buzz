@@ -66,9 +66,29 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ```bash
 brew tap onesilo/tap
+brew trust --formula onesilo/tap/onesilo-buzz
 brew install onesilo-buzz
 onesilo-buzz run
 ```
+
+The `trust` step is not optional on current Homebrew: it refuses to load
+formulae from third-party taps until you trust them, so without it `install`
+stops at *"Refusing to load formula … from untrusted tap"*. Trusting the
+single formula is narrower than `brew trust onesilo/tap`, which also covers
+anything the tap ships in future.
+
+The formula builds from source, so Homebrew requires current Xcode Command
+Line Tools. If the install stops on an outdated Xcode, check which toolchain
+is selected before installing anything — a current Xcode is often already
+present but not selected:
+
+```bash
+xcode-select -p
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
+
+If it still reports outdated Command Line Tools:
+`sudo rm -rf /Library/Developer/CommandLineTools && sudo xcode-select --install`.
 
 `run` walks the whole setup: it offers to install a
 [onesilo-node](https://github.com/onesilo/onesilo-node) so conversation is
