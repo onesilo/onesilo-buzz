@@ -1,7 +1,7 @@
 /**
  * The package version, read from package.json at runtime.
  *
- * Read rather than hard-coded so `silo-buzz --version` cannot drift from
+ * Read rather than hard-coded so `onesilo-buzz --version` cannot drift from
  * what npm and Homebrew think is installed — a version string that lies is
  * worse than none when someone is reporting a bug.
  */

@@ -164,7 +164,7 @@ export interface SupervisedNode {
  * service the operator never asked for would outlive the agent, survive
  * reboots, and hold a Cloudflare tunnel open — decisions that belong to
  * whoever runs the machine, which is why the Homebrew formula ships no
- * `service` block either. This node lives exactly as long as `silo-buzz`.
+ * `service` block either. This node lives exactly as long as `onesilo-buzz`.
  *
  * Output is prefixed rather than inherited so node logs stay
  * distinguishable from agent logs in a single terminal.

@@ -66,8 +66,8 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ```bash
 brew tap onesilo/tap
-brew install silo-buzz
-silo-buzz run
+brew install onesilo-buzz
+onesilo-buzz run
 ```
 
 `run` walks the whole setup: it offers to install a
@@ -77,11 +77,11 @@ the agent, and prints the npub to add to your channels.
 
 ```
 Install onesilo-node so that memory is retained on this machine? [Y/n] y
-[silo-buzz] Installing onesilo-node with Homebrew (builds from source; this can take a few minutes)…
-[silo-buzz] Starting the onesilo-node setup wizard — it will ask a few questions.
+[onesilo-buzz] Installing onesilo-node with Homebrew (builds from source; this can take a few minutes)…
+[onesilo-buzz] Starting the onesilo-node setup wizard — it will ask a few questions.
    ... the node's wizard runs ...
-[silo-buzz] Starting the node…
-[silo-buzz] Node is up — distillation will run on this machine.
+[onesilo-buzz] Starting the node…
+[onesilo-buzz] Node is up — distillation will run on this machine.
 
   ─────────────────────────────────────────────────────────────────
   The agent is running. One step left: let it into your workspace.
@@ -98,11 +98,11 @@ transcripts are sent to your silo for distillation rather than staying on
 your machine. That choice is asked rather than assumed, and if you say yes
 and the install fails, `run` stops instead of quietly doing the opposite.
 
-A node started this way lives exactly as long as `silo-buzz` — it is a
+A node started this way lives exactly as long as `onesilo-buzz` — it is a
 child process, not a background service. Nothing is installed into launchd
 or systemd, and nothing keeps holding a tunnel open after you quit. If you
 want a node that runs on its own schedule, run `onesilo-node` yourself (or
-use [Silo Desktop](https://onesilo.com)); `silo-buzz run` detects one that
+use [Silo Desktop](https://onesilo.com)); `onesilo-buzz run` detects one that
 is already answering and leaves it alone.
 
 Flags: `--yes` takes the recommended answer to every prompt, `--no-node`
@@ -110,9 +110,9 @@ skips the node question entirely. Setting `DISTILL_MODE` yourself disables
 the question too.
 
 The tap ([onesilo/homebrew-tap](https://github.com/onesilo/homebrew-tap)) is
-live, but its formula builds from a published npm tarball, so `brew install
-silo-buzz` only works once `@onesilo/buzz-silo-memory` is on the registry.
-Until then, run from a checkout: `npm install && npm run cli -- run`.
+live, and its formula installs the published npm package, so `brew install
+onesilo-buzz` is the recommended path. To run from a checkout instead:
+`npm install && npm run cli -- run`.
 
 ### 1. Try the demo — no account, no infrastructure
 
@@ -163,17 +163,17 @@ backfilled.
 ### 4. Run it in your workspace
 
 ```bash
-npm start          # or: silo-buzz run
+npm start          # or: onesilo-buzz run
 ```
 
-Add the agent to your Buzz channels like any other member. `silo-buzz run`
+Add the agent to your Buzz channels like any other member. `onesilo-buzz run`
 prints its **npub** (for pasting into a client) and its **hex pubkey** (for
 relay admin tooling) once it is live, along with the `buzz-admin add-member`
 command a member-restricted relay needs — that one is easy to miss, because
 a restricted relay does not reject the agent visibly, it just never delivers
 anything to it. `npm start` logs only the first 12 characters of the pubkey —
 enough to recognise the agent in the log, not enough to admit it — so use
-`silo-buzz run` (or `silo-buzz connect`) when you need the real values. Pin
+`onesilo-buzz run` (or `onesilo-buzz connect`) when you need the real values. Pin
 the identity with `AGENT_SECRET_KEY` in `.env`.
 
 ## How it works

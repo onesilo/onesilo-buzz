@@ -1,7 +1,7 @@
 /**
  * Terminal prompts that behave when there is no terminal.
  *
- * `silo-buzz run` gets used in CI, under supervisors, and piped into logs
+ * `onesilo-buzz run` gets used in CI, under supervisors, and piped into logs
  * just as often as it is typed. A prompt that blocks forever in those cases
  * turns a scripted install into a hung job with no output explaining why, so
  * every question here has a defined non-interactive answer and says which
