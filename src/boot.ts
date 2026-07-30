@@ -1,7 +1,7 @@
 /**
  * Agent bootstrap: identity, memory store, relay, and signal handling.
  *
- * Extracted from `index.ts` so the `silo-buzz` CLI and `npm start` start the
+ * Extracted from `index.ts` so the `onesilo-buzz` CLI and `npm start` start the
  * *same* agent rather than two implementations that drift. `index.ts` is now
  * a thin wrapper; everything that decides how the agent is wired lives here.
  *
@@ -132,7 +132,7 @@ function buildStore(
     if (!oauth.canRefresh) {
       log(
         "warning: paired without a refresh token — the agent will stop working " +
-          "when the current access token expires. Re-run `silo-buzz connect` to fix."
+          "when the current access token expires. Re-run `onesilo-buzz connect` to fix."
       );
     }
     const mcp = new McpClient(`${config.silo.serverUrl}/mcp`, oauth);
@@ -161,7 +161,7 @@ function buildStore(
 /** SILO_MODE=mcp with no completed OAuth pairing. */
 export class NotPairedError extends Error {
   constructor() {
-    super("Not paired with One Silo yet. Run: silo-buzz connect");
+    super("Not paired with One Silo yet. Run: onesilo-buzz connect");
     this.name = "NotPairedError";
   }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `silo-buzz` — the guided way to run the memory agent.
+ * `onesilo-buzz` — the guided way to run the memory agent.
  *
  * The flow it implements, in order:
  *
@@ -37,7 +37,7 @@ import {
 } from "./cli/node-setup.js";
 import { buildInvite, formatInvite } from "./cli/invite.js";
 
-const log = (line: string) => console.log(`[silo-buzz] ${line}`);
+const log = (line: string) => console.log(`[onesilo-buzz] ${line}`);
 
 interface Flags {
   /** `--yes`: take the recommended answer to every prompt. */
@@ -53,12 +53,12 @@ function parseFlags(argv: string[]): Flags {
   };
 }
 
-const USAGE = `silo-buzz — long-term memory for your Buzz workspace
+const USAGE = `onesilo-buzz — long-term memory for your Buzz workspace
 
 Usage:
-  silo-buzz run [--yes] [--no-node]   Set up if needed, then run the agent
-  silo-buzz connect                   Pair with One Silo (OAuth, one-time)
-  silo-buzz --help
+  onesilo-buzz run [--yes] [--no-node]   Set up if needed, then run the agent
+  onesilo-buzz connect                   Pair with One Silo (OAuth, one-time)
+  onesilo-buzz --help
 
 Flags:
   -y, --yes     Accept the recommended answer to every prompt
@@ -85,7 +85,7 @@ async function resolveDistillMode(
   // than an environment variable that is usually sitting in a .env file from
   // some earlier session -- so the flag wins, which is the ordinary
   // convention. Checking DISTILL_MODE first meant `DISTILL_MODE=node
-  // silo-buzz run --no-node` ran node distillation anyway, silently doing the
+  // onesilo-buzz run --no-node` ran node distillation anyway, silently doing the
   // opposite of the flag's documented meaning.
   if (flags.noNode) {
     if (process.env.DISTILL_MODE && process.env.DISTILL_MODE !== "cloud") {
@@ -134,7 +134,7 @@ async function resolveDistillMode(
   if (!(await waitForNode(config.node.adminUrl))) {
     return abort(
       `The node was set up but is not answering at ${config.node.adminUrl}.\n` +
-        "Run it in another terminal to see why, then re-run `silo-buzz run`:\n" +
+        "Run it in another terminal to see why, then re-run `onesilo-buzz run`:\n" +
         "  onesilo-node"
     );
   }
@@ -160,7 +160,7 @@ function abort(detail?: string): null {
     "Stopping rather than falling back to cloud distillation — you asked for " +
       "transcripts to stay on this machine, and silently doing the opposite " +
       "would be worse than not starting.\n" +
-      "To run in the cloud instead: silo-buzz run --no-node"
+      "To run in the cloud instead: onesilo-buzz run --no-node"
   );
   return null;
 }
@@ -197,7 +197,7 @@ async function runCommand(argv: string[], runner: Runner = systemRunner): Promis
     if (err instanceof NotPairedError) {
       console.error(
         "Not paired with One Silo yet — the agent needs somewhere to put memory.\n" +
-          "  silo-buzz connect"
+          "  onesilo-buzz connect"
       );
       return 1;
     }

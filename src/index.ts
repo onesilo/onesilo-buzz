@@ -2,7 +2,7 @@
  * Entrypoint: connect the memory agent to a real Buzz workspace relay.
  *
  * This is the low-level way in, kept for `npm start` and for anyone running
- * from a checkout. `silo-buzz run` is the guided path — it can install and
+ * from a checkout. `onesilo-buzz run` is the guided path — it can install and
  * set up a onesilo-node first, and prints the agent's npub and join
  * instructions once it is live. Both start the same agent via `boot.ts`.
  *

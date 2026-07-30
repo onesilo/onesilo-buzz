@@ -63,7 +63,7 @@ export class McpClient {
     /** Full MCP endpoint URL, e.g. https://connect.onesilo.com/mcp */
     private readonly url: string,
     auth: OAuthLike | McpAuth,
-    private readonly clientInfo = { name: "buzz-silo-memory", version: "0.1.0" }
+    private readonly clientInfo = { name: "onesilo-buzz", version: "0.1.0" }
   ) {
     this.auth = normalizeAuth(auth);
   }

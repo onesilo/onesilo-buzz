@@ -1,5 +1,5 @@
 /**
- * Tests for the `silo-buzz` install/run flow.
+ * Tests for the `onesilo-buzz` install/run flow.
  *
  * The behaviours worth pinning here are the ones that are easy to break and
  * expensive when broken: the non-interactive default, and the refusal to
@@ -204,7 +204,7 @@ test("answering no continues in cloud mode without installing anything", async (
   delete process.env.DISTILL_MODE;
   try {
     // No TTY in the test process, and the default is "yes" — so force the
-    // no-path the way `silo-buzz run --no-node` does.
+    // no-path the way `onesilo-buzz run --no-node` does.
     const mode = await resolveDistillMode(loadConfig({}), parseFlags(["--no-node"]), runner);
     assert.equal(mode, "cloud");
     assert.deepEqual(runner.calls, []);
