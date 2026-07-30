@@ -7,6 +7,8 @@
  * OAuth refresh + retry on 401.
  */
 
+import { version } from "../version.js";
+
 const PROTOCOL_VERSION = "2025-06-18";
 
 export interface ToolResult {
@@ -63,7 +65,7 @@ export class McpClient {
     /** Full MCP endpoint URL, e.g. https://connect.onesilo.com/mcp */
     private readonly url: string,
     auth: OAuthLike | McpAuth,
-    private readonly clientInfo = { name: "onesilo-buzz", version: "0.1.0" }
+    private readonly clientInfo = { name: "onesilo-buzz", version }
   ) {
     this.auth = normalizeAuth(auth);
   }
