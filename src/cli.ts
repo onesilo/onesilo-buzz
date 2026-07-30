@@ -80,13 +80,28 @@ async function resolveDistillMode(
   flags: Flags,
   runner: Runner
 ): Promise<"cloud" | "node" | null> {
+  // `--no-node` is checked first, before DISTILL_MODE. Both are explicit
+  // operator decisions, but a flag typed on this invocation is more immediate
+  // than an environment variable that is usually sitting in a .env file from
+  // some earlier session -- so the flag wins, which is the ordinary
+  // convention. Checking DISTILL_MODE first meant `DISTILL_MODE=node
+  // silo-buzz run --no-node` ran node distillation anyway, silently doing the
+  // opposite of the flag's documented meaning.
+  if (flags.noNode) {
+    if (process.env.DISTILL_MODE && process.env.DISTILL_MODE !== "cloud") {
+      log(
+        `--no-node overrides DISTILL_MODE=${process.env.DISTILL_MODE} — distilling in the cloud.`
+      );
+    }
+    return "cloud";
+  }
+
   // An explicit DISTILL_MODE is an operator decision already made. Asking
   // again would be noise, and overriding it would be worse.
   if (process.env.DISTILL_MODE) {
     log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
     return config.distill;
   }
-  if (flags.noNode) return "cloud";
 
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
