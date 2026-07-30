@@ -9,10 +9,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { askYesNo } from "../src/cli/prompt.js";
 import { buildInvite, formatInvite } from "../src/cli/invite.js";
-import { resolveDistillMode, parseFlags } from "../src/cli.js";
+import { resolveDistillMode, parseFlags, isEntrypoint } from "../src/cli.js";
 import { loadConfig } from "../src/config.js";
 import type { Runner } from "../src/cli/node-setup.js";
 
@@ -218,4 +222,33 @@ test("parseFlags recognises both spellings of --yes", () => {
   assert.equal(parseFlags(["--yes"]).assumeYes, true);
   assert.equal(parseFlags([]).assumeYes, false);
   assert.equal(parseFlags(["--no-node"]).noNode, true);
+});
+
+// Regression: both `npm install -g` and Homebrew put a *symlink* in bin/, so
+// argv[1] is the symlink while import.meta.url is the real path Node resolved
+// the module to. Comparing them without realpath made every installed
+// invocation a silent no-op — `onesilo-buzz run` printed nothing and exited 0.
+// Running from a checkout compared two identical real paths, so nothing here
+// caught it. These assertions are about the symlink case specifically.
+test("isEntrypoint resolves argv[1] through a symlink", () => {
+  const dir = mkdtempSync(join(tmpdir(), "onesilo-buzz-entry-"));
+  try {
+    const real = join(dir, "cli.js");
+    const link = join(dir, "onesilo-buzz");
+    writeFileSync(real, "// stand-in for the built CLI\n");
+    symlinkSync(real, link);
+
+    const moduleUrl = pathToFileURL(real).href;
+
+    // The installed shape: invoked via the symlink, module resolved to the
+    // real file. This is the case that was broken.
+    assert.equal(isEntrypoint(moduleUrl, link), true);
+    // The checkout shape: invoked directly.
+    assert.equal(isEntrypoint(moduleUrl, real), true);
+    // Imported by something else — must not run main().
+    assert.equal(isEntrypoint(moduleUrl, join(dir, "other.js")), false);
+    assert.equal(isEntrypoint(moduleUrl, undefined), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -21,6 +21,7 @@
  * fallback they never saw. This CLI would rather stop and say so.
  */
 
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import type { Config } from "./config.js";
@@ -254,14 +255,24 @@ async function main(): Promise<void> {
 // deleted under a running shell). Treating that as "not invoked directly" is
 // the safe reading: the only cost is a no-op import, whereas guessing the
 // other way runs `main()` inside a test process.
-function isInvokedDirectly(): boolean {
-  const entry = process.argv[1];
+// argv[1] must be resolved through symlinks before comparing. Both npm's
+// global install and Homebrew put a *symlink* in bin/ pointing at this file,
+// so argv[1] is e.g. /opt/homebrew/bin/onesilo-buzz while import.meta.url is
+// the real path Node resolved the module to. Comparing them raw made every
+// installed invocation a silent no-op: main() never ran and the process
+// exited 0 with no output. Running from a checkout worked, which is why the
+// tests did not see it.
+export function isEntrypoint(moduleUrl: string, entry: string | undefined): boolean {
   if (entry === undefined) return false;
   try {
-    return import.meta.url === pathToFileURL(entry).href;
+    return moduleUrl === pathToFileURL(realpathSync(entry)).href;
   } catch {
     return false;
   }
+}
+
+function isInvokedDirectly(): boolean {
+  return isEntrypoint(import.meta.url, process.argv[1]);
 }
 
 if (isInvokedDirectly()) {
