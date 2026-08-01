@@ -392,8 +392,8 @@ npm install -g @onesilo/buzz
 Verify: `onesilo-buzz --version`.
 
 **Pick a working directory and stay in it.** The agent writes its state
-relative to the current directory — `.silo/agent.key` (its identity),
-`.silo/oauth.json` (One Silo credential), `.env` if you use one. Running it
+relative to the current directory — `.silo/agent.key` (its identity) and
+`.silo/oauth.json` (One Silo credential). Running it
 from a different directory later means a *new identity* that your workspace
 has never admitted. A dedicated directory such as `~/buzz-agent` is the
 easy way to make every run the same run:
@@ -413,7 +413,9 @@ onesilo-buzz connect
 ```
 
 This runs a browser OAuth flow against `connect.onesilo.com` and stores a
-refreshable credential at `.silo/oauth.json` (0600). The agent appears in
+credential at `.silo/oauth.json` (0600) — typically refreshable, though the
+control plane can mint one without a refresh token (the pairing flow warns
+when it does). The agent appears in
 your One Silo dashboard as a revocable connection named after its handle
 ("Buzz Agent (@silo)").
 
@@ -460,8 +462,10 @@ aren't on this machine. Plaintext remote URLs are refused at startup.
 
 ### 4. Point the agent at your relay
 
-Configuration is environment-driven; a `.env` in the working directory
-works, as does exporting variables. Minimum:
+Configuration is environment variables — nothing loads a `.env` file for
+you. Export them in the shell you run the agent from (a `.env` file works
+if you source it: `set -a; . ./.env; set +a`), or use `EnvironmentFile=`
+under systemd (step 8). Minimum:
 
 ```bash
 # self-hosted Buzz relay
@@ -493,7 +497,9 @@ onesilo-buzz run          # add --yes to accept every recommended answer
 ```
 
 On first boot the agent generates its keypair and stores the secret at
-`.silo/agent.key` (0600, never printed). Once connected it prints an invite
+`.silo/agent.key` (0600, not printed in normal operation — the secret is
+shown only if that write fails on an interactive terminal, so it never
+lands in piped logs). Once connected it prints an invite
 block:
 
 ```
@@ -556,6 +562,7 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=%h/buzz-agent
+EnvironmentFile=%h/buzz-agent/.env
 ExecStart=/usr/bin/env onesilo-buzz run --yes
 Restart=on-failure
 RestartSec=5
@@ -575,7 +582,8 @@ agent under `launchd` the same way (a `launchd` plist with
 low-ceremony setups.
 
 `WorkingDirectory` is the load-bearing line — it is what keeps the
-identity, credential, and `.env` from step 1 in play.
+identity and credential from step 1 in play; `EnvironmentFile=` is what
+actually loads your `.env` — the agent itself never reads that file.
 
 ### 9. Troubleshooting
 
