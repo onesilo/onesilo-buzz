@@ -64,6 +64,10 @@ Buzz event it was distilled from — because in Buzz, everything is verifiable.
 
 ## Quick start
 
+> Deploying for a team? [docs/RUNBOOK.md](docs/RUNBOOK.md) is the
+> operational end-to-end: install → pair → node deployment shapes →
+> hosted-relay membership → supervision → troubleshooting.
+
 ```bash
 brew tap onesilo/tap
 brew trust --formula onesilo/tap/onesilo-buzz
