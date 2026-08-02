@@ -368,3 +368,10 @@ test("normalizeRelayUrl accepts every shape people paste", async () => {
   assert.equal(normalizeRelayUrl("ws://localhost:7777"), "ws://localhost:7777");
   assert.equal(normalizeRelayUrl("  company.example  "), "wss://company.example");
 });
+
+test("normalizeRelayUrl rejects scheme-only and hostless input", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  for (const junk of ["https://", "http://", "http:", "wss://", "///", "/"]) {
+    assert.equal(normalizeRelayUrl(junk), null, `expected null for ${JSON.stringify(junk)}`);
+  }
+});

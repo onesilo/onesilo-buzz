@@ -183,17 +183,34 @@ async function ensureRelayUrl(flags: Flags): Promise<void> {
   if (flags.assumeYes || !process.stdin.isTTY) return; // scripted/headless runs configure via env
 
   const hosted = await askYesNo("Connect to a hosted community?", { default: "yes" });
-  if (hosted === "no") return; // local dev relay stands
+  if (hosted === "no") {
+    // An explicit "no" is a decision too — persist it, or every future
+    // run re-asks a question that was already answered.
+    process.env.BUZZ_RELAY_URL = DEFAULT_RELAY_URL;
+    persistEnvVar("BUZZ_RELAY_URL", DEFAULT_RELAY_URL);
+    log(`saved BUZZ_RELAY_URL=${DEFAULT_RELAY_URL} (local dev relay) to .env — future runs won't ask.`);
+    return;
+  }
 
   const entered = await askText(
     "Community URL (e.g. company.communities.buzz.xyz)",
     { default: "" }
   );
   if (!entered) {
-    log(`no community URL given — using the local dev relay (${DEFAULT_RELAY_URL}).`);
+    process.env.BUZZ_RELAY_URL = DEFAULT_RELAY_URL;
+    persistEnvVar("BUZZ_RELAY_URL", DEFAULT_RELAY_URL);
+    log(`no community URL given — saved the local dev relay (${DEFAULT_RELAY_URL}) to .env.`);
     return;
   }
   const url = normalizeRelayUrl(entered);
+  if (!url) {
+    // A garbled URL is a typo, not a decision: use the dev relay for this
+    // run only and DON'T persist, so the next run asks again.
+    log(
+      `"${entered}" doesn't look like a community URL — using the local dev relay for this run; will ask again next time.`
+    );
+    return;
+  }
   process.env.BUZZ_RELAY_URL = url;
   persistEnvVar("BUZZ_RELAY_URL", url);
   log(`saved BUZZ_RELAY_URL=${url} to .env — future runs won't ask.`);
@@ -203,12 +220,22 @@ async function ensureRelayUrl(flags: Flags): Promise<void> {
  * People paste community addresses in every shape — bare hostname,
  * https:// from the browser bar, or a real wss:// URL. Normalize to the
  * WebSocket form: explicit ws:// and wss:// pass through, anything else
- * becomes wss://<host> (hosted communities are TLS).
+ * becomes wss://<host> (hosted communities are TLS). Returns null when
+ * the input has no usable host (a scheme with nothing behind it, bare
+ * slashes) — a nonsense endpoint must not be persisted as the relay.
  */
-export function normalizeRelayUrl(input: string): string {
+export function normalizeRelayUrl(input: string): string | null {
   const s = input.trim().replace(/\/+$/, "");
-  if (/^wss?:\/\//i.test(s)) return s;
-  return `wss://${s.replace(/^https?:\/\//i, "")}`;
+  const candidate = /^wss?:\/\//i.test(s) ? s : `wss://${s.replace(/^https?:\/\//i, "")}`;
+  try {
+    const u = new URL(candidate);
+    // Scheme-only input ("http://", "wss:", …) leaves the scheme word
+    // itself parsing as the "hostname". None of those are hosts.
+    if (!u.hostname || /^(https?|wss?)$/i.test(u.hostname)) return null;
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 /**
