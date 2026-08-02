@@ -96,12 +96,16 @@ export class WebSocketRelay implements BuzzRelay {
   }> = [];
   private static readonly OUTBOX_MAX = 1000;
   /**
-   * Ring buffer of recently sent events, re-sent after a NIP-42 AUTH
-   * exchange: a relay that enforces auth-before-publish drops EVENTs sent
-   * in the window between socket-open and auth completion. Re-sending is
-   * safe — relays deduplicate by event id. Sized to OUTBOX_MAX so a full
-   * outbox flush is always replayable — a smaller ring would silently
-   * lose the earliest events of a large post-reconnect burst.
+   * Events sent but not yet acknowledged by the relay, re-sent after a
+   * NIP-42 AUTH exchange: a relay that enforces auth-before-publish drops
+   * EVENTs sent between socket-open and auth completion.
+   *
+   * Entries are dropped once the relay settles them — accepted (delivered)
+   * or refused for anything other than auth (replaying won't help). So
+   * this holds only what is genuinely still in question, which keeps the
+   * post-auth replay small and stops a reconnect from re-sending a
+   * thousand already-delivered events. Bounded anyway, since a relay that
+   * never sends OK would otherwise grow it forever.
    */
   private recentlySent: NostrEvent[] = [];
   private static readonly RECENT_MAX = WebSocketRelay.OUTBOX_MAX;
@@ -275,11 +279,18 @@ export class WebSocketRelay implements BuzzRelay {
         }
         return;
       }
+      const detail = reason ?? "no reason given";
+      const retryable = !accepted && detail.startsWith("auth-required");
+      if (!retryable) {
+        // Settled: either delivered, or refused for a reason re-sending
+        // cannot fix. Either way it must not ride along on the next
+        // auth replay.
+        this.recentlySent = this.recentlySent.filter((e) => e.id !== eventId);
+      }
       if (!accepted) {
-        const detail = reason ?? "no reason given";
         this.log(
           `relay rejected event ${String(eventId).slice(0, 8)}: ${detail}` +
-            (detail.startsWith("auth-required") ? " (will retry after auth)" : "")
+            (retryable ? " (will retry after auth)" : "")
         );
       }
     } else if (type === "CLOSED") {

@@ -215,3 +215,53 @@ test("an auth-required relay ends up with a live subscription", async () => {
     await srv.close();
   }
 });
+
+test("acknowledged events are not replayed on a later auth challenge", async () => {
+  // The replay buffer must hold only what's still in question. Otherwise a
+  // reconnect re-sends every event of the previous connection — up to the
+  // buffer cap — as soon as the new one authenticates.
+  const srv = await server();
+  const eventsSeen: string[] = [];
+  let challenged = false;
+
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as unknown[];
+      const [type] = msg as [string];
+      if (type === "EVENT") {
+        const event = msg[1] as { id: string };
+        eventsSeen.push(event.id);
+        ws.send(JSON.stringify(["OK", event.id, true, ""])); // accepted
+        // Challenge only after the first event is settled, so the replay
+        // that follows would expose a stale buffer.
+        if (!challenged) {
+          challenged = true;
+          setTimeout(() => ws.send(JSON.stringify(["AUTH", "challenge-xyz"])), 20);
+        }
+      }
+      if (type === "AUTH") {
+        const authEvent = msg[1] as { id: string };
+        ws.send(JSON.stringify(["OK", authEvent.id, true, ""]));
+      }
+    });
+  });
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    const published = await relay.publish({
+      kind: 0,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: "{}",
+    });
+    await waitFor(() => challenged);
+    await new Promise((r) => setTimeout(r, 120)); // let any replay land
+
+    const timesSent = eventsSeen.filter((id) => id === published.id).length;
+    assert.equal(timesSent, 1, "an accepted event must not be replayed after auth");
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
