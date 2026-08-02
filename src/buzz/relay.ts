@@ -20,6 +20,14 @@ import { KIND_CHANNEL_MESSAGE, CHANNEL_TAG } from "./events.js";
 
 export type EventHandler = (event: NostrEvent) => void;
 
+/**
+ * Slack subtracted from the newest-seen timestamp when resubscribing, so a
+ * reconnect can't skip an event that was in flight or slightly out of
+ * order. Redelivery inside this window is absorbed by the agent's event-id
+ * dedup; a gap would be silent data loss, so err toward redelivery.
+ */
+const RESUBSCRIBE_SLACK_SECONDS = 60;
+
 export interface BuzzRelay {
   connect(): Promise<void>;
   /** Subscribe to channel messages in the given channels ([] = all visible). */
@@ -33,11 +41,36 @@ export class WebSocketRelay implements BuzzRelay {
   private ws?: WebSocket;
   private subSeq = 0;
   private handlers = new Map<string, EventHandler>();
-  /** Filters by subscription id, replayed after reconnect / NIP-42 auth. */
-  private subscriptions = new Map<string, Record<string, unknown>>();
+  /**
+   * Channel ids by subscription id, replayed after reconnect / NIP-42 auth.
+   * Stored as ids rather than built filters so `since` is recomputed at
+   * (re)subscribe time — see filterFor().
+   */
+  private subscriptions = new Map<string, string[]>();
   private closed = false;
   private reconnectDelayMs = 1000;
   private reconnectTimer?: NodeJS.Timeout;
+
+  /**
+   * Liveness heartbeat.
+   *
+   * Hosted relays sit behind proxies that silently drop idle WebSockets
+   * (Cloudflare's is ~100s). Nothing in the protocol tells us: the socket
+   * stays "open", no 'close' fires, and we sit there receiving nothing
+   * while the relay queues our messages — until some lower layer finally
+   * times out, minutes later, and the reconnect delivers the whole backlog
+   * at once. That is exactly the "the agent replied 20 minutes later"
+   * failure, and it is invisible from the agent's side without this.
+   *
+   * So: ping on an interval, and if a ping goes unanswered by the time the
+   * next one is due, treat the socket as dead and terminate it — which
+   * fires 'close' and runs the normal reconnect path. Detection is bounded
+   * at 2× the interval.
+   */
+  private heartbeatTimer?: NodeJS.Timeout;
+  private awaitingPong = false;
+  /** Newest created_at we've been delivered; floors `since` on resubscribe. */
+  private latestSeenAt = 0;
   /** Signed events waiting for the socket to (re)open; FIFO, bounded. */
   private outbox: Array<{
     event: NostrEvent;
@@ -66,7 +99,9 @@ export class WebSocketRelay implements BuzzRelay {
   constructor(
     private readonly url: string,
     private readonly identity: AgentIdentity,
-    private readonly log: (line: string) => void = () => {}
+    private readonly log: (line: string) => void = () => {},
+    /** Heartbeat pacing; overridable so tests don't wait 30s. */
+    private readonly pingIntervalMs = 30_000
   ) {}
 
   connect(): Promise<void> {
@@ -101,8 +136,9 @@ export class WebSocketRelay implements BuzzRelay {
       if (this.ws !== ws) return; // superseded by a newer socket
       opened = true;
       this.reconnectDelayMs = 1000;
-      for (const [subId, filter] of this.subscriptions) {
-        ws.send(JSON.stringify(["REQ", subId, filter]));
+      this.startHeartbeat(ws);
+      for (const [subId, channelIds] of this.subscriptions) {
+        ws.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
       }
       // Flush replies that were published while disconnected.
       const pending = this.outbox;
@@ -116,7 +152,11 @@ export class WebSocketRelay implements BuzzRelay {
     ws.on("error", (err) => {
       if (!opened) onFail?.(err as Error);
     });
+    ws.on("pong", () => {
+      this.awaitingPong = false;
+    });
     ws.on("close", () => {
+      if (this.ws === ws) this.stopHeartbeat();
       // A close before open settles the initial connect() promise — whether
       // the connect failed or close() was called mid-handshake, the caller
       // must not be left awaiting forever. (Extra settles are no-ops.)
@@ -132,6 +172,55 @@ export class WebSocketRelay implements BuzzRelay {
     ws.on("message", (data) => this.onMessage(String(data)));
   }
 
+  /** Ping on an interval; an unanswered ping means the socket is dead. */
+  private startHeartbeat(ws: WebSocket): void {
+    this.stopHeartbeat();
+    this.awaitingPong = false;
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+      if (this.awaitingPong) {
+        this.log("relay stopped answering pings — reconnecting");
+        this.stopHeartbeat();
+        // terminate(), not close(): a half-open socket will never complete
+        // a closing handshake, and close() would hang waiting for it.
+        ws.terminate();
+        return;
+      }
+      this.awaitingPong = true;
+      ws.ping();
+    }, this.pingIntervalMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    this.awaitingPong = false;
+  }
+
+  /**
+   * The REQ filter, with `since` computed now rather than reused.
+   *
+   * A reconnect that replayed the construction-time floor would re-deliver
+   * every event since the process started — on a long-lived agent that
+   * outgrows the dedup window, meaning re-answered commands and duplicate
+   * captures. Floor at the newest event we've actually seen instead, minus
+   * a slack window so an out-of-order or clock-skewed event straddling the
+   * reconnect isn't skipped.
+   */
+  private filterFor(channelIds: string[]): Record<string, unknown> {
+    const since = Math.max(
+      this.sinceFloor,
+      this.latestSeenAt > 0 ? this.latestSeenAt - RESUBSCRIBE_SLACK_SECONDS : 0
+    );
+    const filter: Record<string, unknown> = {
+      kinds: [KIND_CHANNEL_MESSAGE],
+      since,
+    };
+    if (channelIds.length > 0) filter[`#${CHANNEL_TAG}`] = channelIds;
+    return filter;
+  }
+
   private onMessage(raw: string): void {
     if (this.closed) return; // no dispatch after shutdown was requested
     let msg: unknown[];
@@ -144,6 +233,7 @@ export class WebSocketRelay implements BuzzRelay {
     if (type === "EVENT") {
       const [subId, event] = rest as [string, NostrEvent];
       if (!verifyEvent(event)) return; // never trust unsigned/forged input
+      if (event.created_at > this.latestSeenAt) this.latestSeenAt = event.created_at;
       this.handlers.get(subId)?.(event);
     } else if (type === "OK") {
       // NIP-01 write acknowledgement. publish() resolves on socket write
@@ -175,8 +265,8 @@ export class WebSocketRelay implements BuzzRelay {
       // EVENTs sent before the challenge completed. Replaying both is
       // safe: a REQ with an existing sub id replaces that subscription,
       // and relays deduplicate EVENTs by id.
-      for (const [subId, filter] of this.subscriptions) {
-        this.ws?.send(JSON.stringify(["REQ", subId, filter]));
+      for (const [subId, channelIds] of this.subscriptions) {
+        this.ws?.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
       }
       for (const event of this.recentlySent) {
         this.ws?.send(JSON.stringify(["EVENT", event]));
@@ -196,16 +286,10 @@ export class WebSocketRelay implements BuzzRelay {
     if (!this.ws) throw new Error("relay not connected");
     const subId = `silo-mem-${++this.subSeq}`;
     this.handlers.set(subId, onEvent);
-    const filter: Record<string, unknown> = {
-      kinds: [KIND_CHANNEL_MESSAGE],
-      // Live tail only (backfill is a deliberate non-goal), floored at
-      // construction so startup work can't open a gap; the agent's event
-      // dedup absorbs any overlap.
-      since: this.sinceFloor,
-    };
-    if (channelIds.length > 0) filter[`#${CHANNEL_TAG}`] = channelIds;
-    this.subscriptions.set(subId, filter);
-    this.ws.send(JSON.stringify(["REQ", subId, filter]));
+    // Live tail only (backfill is a deliberate non-goal). The floor is
+    // computed per (re)subscribe by filterFor().
+    this.subscriptions.set(subId, channelIds);
+    this.ws.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
   }
 
   /**
@@ -236,6 +320,7 @@ export class WebSocketRelay implements BuzzRelay {
 
   close(): void {
     this.closed = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     const pending = this.outbox;
     this.outbox = [];
