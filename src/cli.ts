@@ -24,12 +24,13 @@
  * fallback they never saw. This CLI would rather stop and say so.
  */
 
-import { realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { loadConfig, loadDotEnv } from "./config.js";
+import { loadConfig, loadDotEnv, DEFAULT_RELAY_URL } from "./config.js";
 import type { Config } from "./config.js";
 import { startAgent, NotPairedError } from "./boot.js";
-import { askYesNo, type Answer } from "./cli/prompt.js";
+import { SiloOAuthClient } from "./silo/oauth.js";
+import { askText, askYesNo, type Answer } from "./cli/prompt.js";
 import {
   detectNode,
   installNode,
@@ -169,8 +170,107 @@ function abort(detail?: string): null {
   return null;
 }
 
+/**
+ * First-run relay question: with no BUZZ_RELAY_URL anywhere (shell or
+ * .env), ask for the workspace's wss:// URL instead of silently using the
+ * localhost dev default — a wrong relay presents as "agent runs, nothing
+ * happens", the worst kind of failure to debug. A non-default answer is
+ * persisted to .env in the working directory so it's asked exactly once.
+ */
+async function ensureRelayUrl(flags: Flags): Promise<void> {
+  if (process.env.BUZZ_RELAY_URL) return;
+  if (flags.assumeYes) return; // scripted runs keep the default silently
+  const answer = await askText(
+    "Relay URL of your Buzz workspace (wss://…, from your community settings; Enter = local dev relay)",
+    { default: DEFAULT_RELAY_URL }
+  );
+  if (answer === DEFAULT_RELAY_URL) return; // don't pin the dev default
+  process.env.BUZZ_RELAY_URL = answer;
+  persistEnvVar("BUZZ_RELAY_URL", answer);
+  log(`saved BUZZ_RELAY_URL to .env — future runs won't ask.`);
+}
+
+/**
+ * Pairing check, BEFORE any node install/setup/start: SILO_MODE=mcp (the
+ * default) stores memory in One Silo and cannot run unpaired. Discovering
+ * that after minutes of node bootstrap — and then exiting, taking the
+ * supervised node down too — was the original first-run experience, and it
+ * was terrible. Interactive runs can pair right here, or switch to
+ * node-local memory instead; non-interactive runs fail fast with the fix.
+ */
+async function ensurePairedOrRerouted(config: Config, flags: Flags): Promise<boolean> {
+  if (config.silo.mode !== "mcp") return true;
+  const oauth = new SiloOAuthClient({
+    serverUrl: config.silo.serverUrl,
+    agentHandle: config.agentHandle,
+    tokenPath: config.silo.tokenPath,
+    callbackPort: config.silo.callbackPort,
+  });
+  if (oauth.isPaired) return true;
+
+  if (!process.stdin.isTTY) {
+    console.error(
+      "Not paired with One Silo yet (SILO_MODE=mcp stores memory in your silo).\n" +
+        "  Pair:                onesilo-buzz connect\n" +
+        "  Or keep memory local: set SILO_MODE=node in .env (needs a onesilo-node)"
+    );
+    return false;
+  }
+
+  log("The agent needs a memory home. SILO_MODE=mcp (the default) uses your One Silo account.");
+  const pair = await askYesNo(
+    "Pair with One Silo now (opens your browser; one-time)?",
+    { default: "yes", forced: flags.assumeYes ? "yes" : undefined }
+  );
+  if (pair === "yes") {
+    try {
+      await oauth.pair((line) => console.log(line));
+      return true;
+    } catch (err) {
+      // Most likely: callback port in use (a running node holds 8765) or
+      // no browser completion. Say what happened and stop before any node
+      // work — same failure, minus the wasted setup.
+      console.error(`pairing failed: ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
+
+  const useNode = await askYesNo(
+    "Keep memory on a local onesilo-node instead (nothing stored in the cloud)?",
+    { default: "yes" }
+  );
+  if (useNode === "yes") {
+    process.env.SILO_MODE = "node";
+    persistEnvVar("SILO_MODE", "node");
+    log("saved SILO_MODE=node to .env — memory will live on this machine's node.");
+    return true;
+  }
+  console.error("No memory home chosen — run `onesilo-buzz connect` or set SILO_MODE, then re-run.");
+  return false;
+}
+
+/** Set or replace NAME=value in ./.env (created if missing). */
+function persistEnvVar(name: string, value: string): void {
+  const path = ".env";
+  let content = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const line = `${name}=${value}`;
+  const existing = new RegExp(`^${name}=.*$`, "m");
+  if (existing.test(content)) {
+    content = content.replace(existing, line);
+  } else {
+    if (content !== "" && !content.endsWith("\n")) content += "\n";
+    content += `${line}\n`;
+  }
+  writeFileSync(path, content);
+}
+
 async function runCommand(argv: string[], runner: Runner = systemRunner): Promise<number> {
   const flags = parseFlags(argv);
+
+  await ensureRelayUrl(flags);
+  if (!(await ensurePairedOrRerouted(loadConfig(), flags))) return 1;
+  // Both steps above may have changed process.env (relay URL, SILO_MODE) —
+  // read the config after them, not before.
   const config = loadConfig();
 
   const distill = await resolveDistillMode(config, flags, runner);
@@ -286,4 +386,4 @@ if (isInvokedDirectly()) {
   });
 }
 
-export { runCommand, resolveDistillMode, parseFlags };
+export { runCommand, resolveDistillMode, parseFlags, persistEnvVar };

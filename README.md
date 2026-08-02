@@ -326,9 +326,9 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BUZZ_RELAY_URL` | `ws://localhost:7777` | Your Buzz workspace relay |
+| `BUZZ_RELAY_URL` | *(asked on first run)* | Your Buzz workspace relay; `ws://localhost:7777` for local dev |
 | `BUZZ_CHANNEL_IDS` | *(all visible)* | Comma-separated channels to listen in |
-| `AGENT_HANDLE` | `silo` | The agent's @handle |
+| `AGENT_HANDLE` | `OneSilo` | The agent's @handle |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
 | `SILO_MODE` | `mcp` | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://connect.onesilo.com` | Silo control plane (OAuth + MCP) |

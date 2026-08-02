@@ -89,6 +89,9 @@ export interface Config {
       };
 }
 
+/** The dev default; a real workspace sets BUZZ_RELAY_URL (the CLI asks). */
+export const DEFAULT_RELAY_URL = "ws://localhost:7777";
+
 const SILO_MODES = new Set(["mcp", "local", "relay", "node"]);
 
 export function loadConfig(env = process.env): Config {
@@ -96,8 +99,8 @@ export function loadConfig(env = process.env): Config {
     ? (env.SILO_MODE as "mcp" | "local" | "relay" | "node")
     : "mcp";
   return {
-    relayUrl: env.BUZZ_RELAY_URL ?? "ws://localhost:7777",
-    agentHandle: env.AGENT_HANDLE ?? "silo",
+    relayUrl: env.BUZZ_RELAY_URL ?? DEFAULT_RELAY_URL,
+    agentHandle: env.AGENT_HANDLE ?? "OneSilo",
     agentSecretKeyHex: env.AGENT_SECRET_KEY,
     channelIds: (env.BUZZ_CHANNEL_IDS ?? "")
       .split(",")
