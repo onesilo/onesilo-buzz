@@ -71,6 +71,23 @@ export class WebSocketRelay implements BuzzRelay {
   private awaitingPong = false;
   /** Newest created_at we've been delivered; floors `since` on resubscribe. */
   private latestSeenAt = 0;
+
+  /**
+   * NIP-42 state, per connection.
+   *
+   * The agent opens a socket and immediately publishes its profile and
+   * subscribes — but a relay that enforces auth only challenges us *after*
+   * the socket is open, so those first frames are unauthenticated and get
+   * refused: an `OK … false "auth-required: …"` for the event, and a
+   * `CLOSED <sub> "auth-required: …"` for the subscription. The CLOSED is
+   * the dangerous one — ignoring it leaves the agent connected, healthy
+   * looking, and subscribed to absolutely nothing.
+   *
+   * So: remember what we sent, and once the relay confirms our AUTH, put
+   * it all back.
+   */
+  private authEventId?: string;
+  private authenticated = false;
   /** Signed events waiting for the socket to (re)open; FIFO, bounded. */
   private outbox: Array<{
     event: NostrEvent;
@@ -79,12 +96,16 @@ export class WebSocketRelay implements BuzzRelay {
   }> = [];
   private static readonly OUTBOX_MAX = 1000;
   /**
-   * Ring buffer of recently sent events, re-sent after a NIP-42 AUTH
-   * exchange: a relay that enforces auth-before-publish drops EVENTs sent
-   * in the window between socket-open and auth completion. Re-sending is
-   * safe — relays deduplicate by event id. Sized to OUTBOX_MAX so a full
-   * outbox flush is always replayable — a smaller ring would silently
-   * lose the earliest events of a large post-reconnect burst.
+   * Events sent but not yet acknowledged by the relay, re-sent after a
+   * NIP-42 AUTH exchange: a relay that enforces auth-before-publish drops
+   * EVENTs sent between socket-open and auth completion.
+   *
+   * Entries are dropped once the relay settles them — accepted (delivered)
+   * or refused for anything other than auth (replaying won't help). So
+   * this holds only what is genuinely still in question, which keeps the
+   * post-auth replay small and stops a reconnect from re-sending a
+   * thousand already-delivered events. Bounded anyway, since a relay that
+   * never sends OK would otherwise grow it forever.
    */
   private recentlySent: NostrEvent[] = [];
   private static readonly RECENT_MAX = WebSocketRelay.OUTBOX_MAX;
@@ -125,6 +146,9 @@ export class WebSocketRelay implements BuzzRelay {
     }
     const ws = new WebSocket(this.url);
     this.ws = ws;
+    // Auth is per-connection: a reconnect starts unauthenticated.
+    this.authenticated = false;
+    this.authEventId = undefined;
     let opened = false;
     ws.on("open", () => {
       if (this.closed) {
@@ -240,11 +264,53 @@ export class WebSocketRelay implements BuzzRelay {
       // (see its doc); a rejection surfaces here for the operator. Gating
       // publish() on OK (with timeouts for relays that omit it) is roadmap.
       const [eventId, accepted, reason] = rest as [string, boolean, string?];
+      if (eventId === this.authEventId) {
+        // The one OK that decides whether this agent can work at all.
+        if (accepted) {
+          this.authenticated = true;
+          this.log("authenticated with the relay (NIP-42)");
+          this.replayAfterAuth();
+        } else {
+          this.log(
+            `relay REJECTED our authentication: ${reason ?? "no reason given"} — ` +
+              `it will not deliver messages to this agent. Check that this pubkey ` +
+              `is a member of the workspace.`
+          );
+        }
+        return;
+      }
+      const detail = reason ?? "no reason given";
+      const retryable = !accepted && detail.startsWith("auth-required");
+      if (!retryable) {
+        // Settled: either delivered, or refused for a reason re-sending
+        // cannot fix. Either way it must not ride along on the next
+        // auth replay.
+        this.recentlySent = this.recentlySent.filter((e) => e.id !== eventId);
+      }
       if (!accepted) {
         this.log(
-          `relay rejected event ${String(eventId).slice(0, 8)}: ${reason ?? "no reason given"}`
+          `relay rejected event ${String(eventId).slice(0, 8)}: ${detail}` +
+            (retryable ? " (will retry after auth)" : "")
         );
       }
+    } else if (type === "CLOSED") {
+      // A rejected subscription. Ignoring this was how the agent ended up
+      // connected but deaf: the relay refuses the pre-auth REQ, says so
+      // here, and nothing ever re-established it.
+      const [subId, reason] = rest as [string, string?];
+      const detail = reason ?? "no reason given";
+      this.log(`relay closed subscription ${subId}: ${detail}`);
+      if (detail.startsWith("auth-required")) {
+        // Re-issue now if we're already authenticated; otherwise the
+        // post-auth replay covers it.
+        if (this.authenticated) this.resubscribeAll();
+      }
+    } else if (type === "EOSE") {
+      // End of stored events: the subscription is live. Worth saying —
+      // it's the only positive confirmation the agent is actually
+      // listening, and its absence is what "nothing happens" looks like.
+      const [subId] = rest as [string];
+      this.log(`subscription ${subId} is live`);
     } else if (type === "AUTH") {
       // NIP-42: relay challenges us; sign kind 22242 with our agent key.
       const [challenge] = rest as [string];
@@ -260,17 +326,34 @@ export class WebSocketRelay implements BuzzRelay {
         },
         this.identity.secretKey
       );
+      this.authEventId = auth.id;
+      this.log("relay requested authentication (NIP-42) — responding");
       this.ws?.send(JSON.stringify(["AUTH", auth]));
-      // A relay that enforces auth-before-subscribe/publish drops REQs and
-      // EVENTs sent before the challenge completed. Replaying both is
-      // safe: a REQ with an existing sub id replaces that subscription,
-      // and relays deduplicate EVENTs by id.
-      for (const [subId, channelIds] of this.subscriptions) {
-        this.ws?.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
-      }
-      for (const event of this.recentlySent) {
-        this.ws?.send(JSON.stringify(["EVENT", event]));
-      }
+      // Replay immediately as well as on the auth OK: relays are
+      // inconsistent about acknowledging the AUTH event, and a relay that
+      // processes frames in order will handle these after it. Both paths
+      // are idempotent — a REQ with an existing sub id replaces that
+      // subscription, and relays deduplicate EVENTs by id.
+      this.replayAfterAuth();
+    }
+  }
+
+  /** Re-issue every subscription on the current socket. */
+  private resubscribeAll(): void {
+    for (const [subId, channelIds] of this.subscriptions) {
+      this.ws?.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
+    }
+  }
+
+  /**
+   * Put back everything the relay may have refused while we were
+   * unauthenticated: subscriptions first (so we don't miss events our own
+   * republished writes provoke), then recently sent events.
+   */
+  private replayAfterAuth(): void {
+    this.resubscribeAll();
+    for (const event of this.recentlySent) {
+      this.ws?.send(JSON.stringify(["EVENT", event]));
     }
   }
 
