@@ -21,12 +21,19 @@ if (config.silo.mode !== "mcp") {
   process.exit(1);
 }
 
-const oauth = new SiloOAuthClient({
-  serverUrl: config.silo.serverUrl,
-  agentHandle: config.agentHandle,
-  tokenPath: config.silo.tokenPath,
-  callbackPort: config.silo.callbackPort,
-});
+let oauth: SiloOAuthClient;
+try {
+  oauth = new SiloOAuthClient({
+    serverUrl: config.silo.serverUrl,
+    agentHandle: config.agentHandle,
+    tokenPath: config.silo.tokenPath,
+    callbackPort: config.silo.callbackPort,
+  });
+} catch (err) {
+  // Corrupt credential file: instructions, not a module-level stack.
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 
 oauth.pair().catch((err) => {
   console.error("pairing failed:", err);

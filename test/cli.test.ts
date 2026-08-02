@@ -375,3 +375,41 @@ test("normalizeRelayUrl rejects scheme-only and hostless input", async () => {
     assert.equal(normalizeRelayUrl(junk), null, `expected null for ${JSON.stringify(junk)}`);
   }
 });
+
+test("normalizeRelayUrl strips browser paths but honors explicit ws URLs", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  assert.equal(
+    normalizeRelayUrl("https://company.communities.buzz.xyz/channels/eng?tab=1"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("company.example:8443/some/path"),
+    "wss://company.example:8443"
+  );
+  // Someone typing wss:// with a path knows their endpoint — keep it.
+  assert.equal(
+    normalizeRelayUrl("wss://company.example/relay"),
+    "wss://company.example/relay"
+  );
+});
+
+test("persistEnvVar collapses pre-existing duplicates to one line", async () => {
+  const { mkdtempSync, readFileSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "buzz-persist-dupes-"));
+  const prevCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    writeFileSync(".env", "SILO_MODE=mcp\nBUZZ_RELAY_URL=wss://old.example\nAGENT_HANDLE=x\nBUZZ_RELAY_URL=wss://older.example\n");
+    persistEnvVar("BUZZ_RELAY_URL", "wss://new.example");
+    const content = readFileSync(".env", "utf8");
+    assert.equal(content.match(/BUZZ_RELAY_URL=/g)?.length, 1, "duplicates must collapse");
+    assert.match(content, /^BUZZ_RELAY_URL=wss:\/\/new\.example$/m);
+    assert.match(content, /^SILO_MODE=mcp$/m);
+    assert.match(content, /^AGENT_HANDLE=x$/m);
+  } finally {
+    process.chdir(prevCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

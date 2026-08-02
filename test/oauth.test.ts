@@ -117,3 +117,27 @@ test("the authorize request carries PKCE and the loopback redirect", () => {
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
   assert.equal(url.searchParams.get("state"), "the-state");
 });
+
+test("a corrupt token file names the file and the fix, not a JSON stack", async () => {
+  const { SiloOAuthClient } = await import("../src/silo/oauth.js");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "buzz-oauth-corrupt-"));
+  const tokenPath = join(dir, "oauth.json");
+  writeFileSync(tokenPath, "{ not json");
+  try {
+    assert.throws(
+      () =>
+        new SiloOAuthClient({
+          serverUrl: "https://connect.onesilo.com",
+          agentHandle: "OneSilo",
+          tokenPath,
+        }),
+      (err: Error) =>
+        err.message.includes(tokenPath) && err.message.includes("onesilo-buzz connect")
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

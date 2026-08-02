@@ -218,21 +218,25 @@ async function ensureRelayUrl(flags: Flags): Promise<void> {
 
 /**
  * People paste community addresses in every shape — bare hostname,
- * https:// from the browser bar, or a real wss:// URL. Normalize to the
- * WebSocket form: explicit ws:// and wss:// pass through, anything else
- * becomes wss://<host> (hosted communities are TLS). Returns null when
- * the input has no usable host (a scheme with nothing behind it, bare
+ * https:// from the browser bar (often with a path/query), or a real
+ * wss:// URL. Normalize to the WebSocket form: an explicit ws:// or
+ * wss:// URL passes through unchanged (someone typing that knows their
+ * endpoint, path included); everything else reduces to wss://<host[:port]>
+ * — hosted communities are TLS and serve the relay at the origin, so a
+ * browser path would only break the connection. Returns null when the
+ * input has no usable host (a scheme with nothing behind it, bare
  * slashes) — a nonsense endpoint must not be persisted as the relay.
  */
 export function normalizeRelayUrl(input: string): string | null {
   const s = input.trim().replace(/\/+$/, "");
-  const candidate = /^wss?:\/\//i.test(s) ? s : `wss://${s.replace(/^https?:\/\//i, "")}`;
+  const explicitWs = /^wss?:\/\//i.test(s);
+  const candidate = explicitWs ? s : `wss://${s.replace(/^https?:\/\//i, "")}`;
   try {
     const u = new URL(candidate);
     // Scheme-only input ("http://", "wss:", …) leaves the scheme word
     // itself parsing as the "hostname". None of those are hosts.
     if (!u.hostname || /^(https?|wss?)$/i.test(u.hostname)) return null;
-    return candidate;
+    return explicitWs ? candidate : `wss://${u.host}`;
   } catch {
     return null;
   }
@@ -248,12 +252,19 @@ export function normalizeRelayUrl(input: string): string | null {
  */
 async function ensurePairedOrRerouted(config: Config, flags: Flags): Promise<boolean> {
   if (config.silo.mode !== "mcp") return true;
-  const oauth = new SiloOAuthClient({
-    serverUrl: config.silo.serverUrl,
-    agentHandle: config.agentHandle,
-    tokenPath: config.silo.tokenPath,
-    callbackPort: config.silo.callbackPort,
-  });
+  let oauth: SiloOAuthClient;
+  try {
+    oauth = new SiloOAuthClient({
+      serverUrl: config.silo.serverUrl,
+      agentHandle: config.agentHandle,
+      tokenPath: config.silo.tokenPath,
+      callbackPort: config.silo.callbackPort,
+    });
+  } catch (err) {
+    // A corrupt credential file must produce instructions, not a stack.
+    console.error(err instanceof Error ? err.message : String(err));
+    return false;
+  }
   if (oauth.isPaired) return true;
 
   if (!process.stdin.isTTY) {
@@ -297,19 +308,19 @@ async function ensurePairedOrRerouted(config: Config, flags: Flags): Promise<boo
   return false;
 }
 
-/** Set or replace NAME=value in ./.env (created if missing). */
+/**
+ * Set NAME=value in ./.env (created if missing). Every existing
+ * definition of NAME is removed first — a hand-edited file can carry
+ * duplicates, and replacing only the first would leave a survivor that
+ * still wins at load time.
+ */
 function persistEnvVar(name: string, value: string): void {
   const path = ".env";
-  let content = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const line = `${name}=${value}`;
-  const existing = new RegExp(`^${name}=.*$`, "m");
-  if (existing.test(content)) {
-    content = content.replace(existing, line);
-  } else {
-    if (content !== "" && !content.endsWith("\n")) content += "\n";
-    content += `${line}\n`;
-  }
-  writeFileSync(path, content);
+  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const kept = existing.split("\n").filter((line) => !line.startsWith(`${name}=`));
+  while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+  kept.push(`${name}=${value}`);
+  writeFileSync(path, kept.join("\n") + "\n");
 }
 
 async function runCommand(argv: string[], runner: Runner = systemRunner): Promise<number> {

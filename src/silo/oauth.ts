@@ -160,7 +160,18 @@ export class SiloOAuthClient {
 
   constructor(private readonly config: OAuthConfig) {
     if (existsSync(config.tokenPath)) {
-      this.creds = JSON.parse(readFileSync(config.tokenPath, "utf8"));
+      try {
+        this.creds = JSON.parse(readFileSync(config.tokenPath, "utf8"));
+      } catch (err) {
+        // Name the file and the fix — a raw JSON.parse stack points at
+        // neither. Deliberately NOT treated as "not paired": silently
+        // pairing over a corrupt file would discard whatever credential
+        // it held without the operator ever knowing.
+        throw new Error(
+          `One Silo credential file ${config.tokenPath} is unreadable or corrupt ` +
+            `(${(err as Error).message}). Delete it and re-pair: onesilo-buzz connect`
+        );
+      }
     }
   }
 
