@@ -171,23 +171,44 @@ function abort(detail?: string): null {
 }
 
 /**
- * First-run relay question: with no BUZZ_RELAY_URL anywhere (shell or
- * .env), ask for the workspace's wss:// URL instead of silently using the
- * localhost dev default — a wrong relay presents as "agent runs, nothing
- * happens", the worst kind of failure to debug. A non-default answer is
- * persisted to .env in the working directory so it's asked exactly once.
+ * First-run community question: with no BUZZ_RELAY_URL anywhere (shell or
+ * .env), ask whether this agent joins a hosted community, and only then
+ * for its URL — a wrong relay presents as "agent runs, nothing happens",
+ * the worst kind of failure to debug. Answering no (or giving no URL)
+ * keeps the localhost dev relay. The URL is persisted to .env in the
+ * working directory so it's asked exactly once.
  */
 async function ensureRelayUrl(flags: Flags): Promise<void> {
   if (process.env.BUZZ_RELAY_URL) return;
-  if (flags.assumeYes) return; // scripted runs keep the default silently
-  const answer = await askText(
-    "Relay URL of your Buzz workspace (wss://…, from your community settings; Enter = local dev relay)",
-    { default: DEFAULT_RELAY_URL }
+  if (flags.assumeYes || !process.stdin.isTTY) return; // scripted/headless runs configure via env
+
+  const hosted = await askYesNo("Connect to a hosted community?", { default: "yes" });
+  if (hosted === "no") return; // local dev relay stands
+
+  const entered = await askText(
+    "Community URL (e.g. company.communities.buzz.xyz)",
+    { default: "" }
   );
-  if (answer === DEFAULT_RELAY_URL) return; // don't pin the dev default
-  process.env.BUZZ_RELAY_URL = answer;
-  persistEnvVar("BUZZ_RELAY_URL", answer);
-  log(`saved BUZZ_RELAY_URL to .env — future runs won't ask.`);
+  if (!entered) {
+    log(`no community URL given — using the local dev relay (${DEFAULT_RELAY_URL}).`);
+    return;
+  }
+  const url = normalizeRelayUrl(entered);
+  process.env.BUZZ_RELAY_URL = url;
+  persistEnvVar("BUZZ_RELAY_URL", url);
+  log(`saved BUZZ_RELAY_URL=${url} to .env — future runs won't ask.`);
+}
+
+/**
+ * People paste community addresses in every shape — bare hostname,
+ * https:// from the browser bar, or a real wss:// URL. Normalize to the
+ * WebSocket form: explicit ws:// and wss:// pass through, anything else
+ * becomes wss://<host> (hosted communities are TLS).
+ */
+export function normalizeRelayUrl(input: string): string {
+  const s = input.trim().replace(/\/+$/, "");
+  if (/^wss?:\/\//i.test(s)) return s;
+  return `wss://${s.replace(/^https?:\/\//i, "")}`;
 }
 
 /**

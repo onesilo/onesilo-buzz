@@ -346,3 +346,25 @@ test("askText takes typed answers, defaults on Enter and on no terminal", async 
   assert.equal(headless, "ws://localhost:7777");
   assert.match(cap.text(), /no terminal/);
 });
+
+test("normalizeRelayUrl accepts every shape people paste", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  assert.equal(
+    normalizeRelayUrl("company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("https://company.communities.buzz.xyz/"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("http://company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("wss://company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(normalizeRelayUrl("ws://localhost:7777"), "ws://localhost:7777");
+  assert.equal(normalizeRelayUrl("  company.example  "), "wss://company.example");
+});
