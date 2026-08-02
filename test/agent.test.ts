@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { finalizeEvent, generateSecretKey } from "nostr-tools";
 import { FakeRelay } from "../src/buzz/fake-relay.js";
-import { KIND_CHANNEL_MESSAGE, CHANNEL_TAG } from "../src/buzz/events.js";
+import { KIND_CHANNEL_MESSAGE, KIND_METADATA, CHANNEL_TAG } from "../src/buzz/events.js";
 import { loadIdentity } from "../src/buzz/identity.js";
 import { LocalSiloStore } from "../src/silo/local.js";
 import { SiloMemoryAgent } from "../src/agent.js";
@@ -19,8 +19,8 @@ async function setup() {
   // The kind 0 profile is published on start; keep it for tests that
   // assert on it, but hand back a relay whose `published` means "replies"
   // — every assertion here is about what the agent SAYS.
-  const profile = relay.published.find((e) => e.kind === 0);
-  relay.published = relay.published.filter((e) => e.kind !== 0);
+  const profile = relay.published.find((e) => e.kind === KIND_METADATA);
+  relay.published = relay.published.filter((e) => e.kind !== KIND_METADATA);
   const userSk = generateSecretKey();
   const say = (content: string, channelId = "eng", extraTags: string[][] = []) =>
     relay.deliver(
@@ -281,7 +281,7 @@ test("silo errors on commands produce an apologetic reply", async () => {
   };
   const agent = new SiloMemoryAgent(relay, failing, identity);
   await agent.start();
-  relay.published = relay.published.filter((e) => e.kind !== 0); // drop the profile
+  relay.published = relay.published.filter((e) => e.kind !== KIND_METADATA); // drop the profile
   relay.deliver(
     finalizeEvent(
       {
@@ -495,7 +495,7 @@ test("a failed profile publish does not stop the agent", async () => {
   const relay = new FakeRelay(identity.secretKey);
   const realPublish = relay.publish.bind(relay);
   relay.publish = async (t) => {
-    if (t.kind === 0) throw new Error("metadata rejected");
+    if (t.kind === KIND_METADATA) throw new Error("metadata rejected");
     return realPublish(t);
   };
   const logs: string[] = [];
