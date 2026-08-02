@@ -42,11 +42,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Keep in step with the engines.node floor in package.json.
+          # Same major as the engines.node floor in package.json, with the
+          # patch floored: trusted publishing needs Node >= 22.14.0, and a
+          # bare '22' can resolve to an older cached patch on the runner.
+          # check-latest keeps the resolution honest instead of trusting
+          # the runner's tool cache.
           # Deliberately NO registry-url here: setup-node would write an
           # .npmrc that requires NODE_AUTH_TOKEN, which trusted publishing
           # neither has nor needs.
-          node-version: '22'
+          node-version: '>=22.14 <23'
+          check-latest: true
           cache: npm
 
       # Trusted publishing needs npm >= 11.5.1; Node 22 bundles npm 10.
