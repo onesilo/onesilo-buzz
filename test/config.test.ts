@@ -85,6 +85,9 @@ test("loadDotEnv loads .env from a working directory; exported vars win", async 
     envPath,
     "BUZZ_TEST_DOTENV_ONLY=from_file\nBUZZ_TEST_DOTENV_BOTH=from_file\n"
   );
+  const prevOnly = process.env.BUZZ_TEST_DOTENV_ONLY;
+  const prevBoth = process.env.BUZZ_TEST_DOTENV_BOTH;
+  delete process.env.BUZZ_TEST_DOTENV_ONLY; // must be unset for the fill-in assertion
   process.env.BUZZ_TEST_DOTENV_BOTH = "from_shell";
   try {
     loadDotEnv(envPath);
@@ -93,8 +96,12 @@ test("loadDotEnv loads .env from a working directory; exported vars win", async 
     // …and never overrides what it did (same precedence as node --env-file).
     assert.equal(process.env.BUZZ_TEST_DOTENV_BOTH, "from_shell");
   } finally {
-    delete process.env.BUZZ_TEST_DOTENV_ONLY;
-    delete process.env.BUZZ_TEST_DOTENV_BOTH;
+    // Restore, don't blindly delete — the runner's environment may have
+    // set these, and clobbering them would leak state into later tests.
+    if (prevOnly === undefined) delete process.env.BUZZ_TEST_DOTENV_ONLY;
+    else process.env.BUZZ_TEST_DOTENV_ONLY = prevOnly;
+    if (prevBoth === undefined) delete process.env.BUZZ_TEST_DOTENV_BOTH;
+    else process.env.BUZZ_TEST_DOTENV_BOTH = prevBoth;
     rmSync(dir, { recursive: true, force: true });
   }
 });
