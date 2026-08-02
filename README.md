@@ -96,14 +96,15 @@ If it still reports outdated Command Line Tools:
 
 `run` walks the whole setup: it offers to install a
 [onesilo-node](https://github.com/onesilo/onesilo-node) so conversation is
-distilled on your own machine, hands off to the node's setup wizard, starts
-the agent, and prints the npub to add to your channels.
+distilled on your own machine, initializes it with the node's own
+non-interactive setup, starts the agent, and prints the npub to add to your
+channels.
 
 ```
 Install onesilo-node so that memory is retained on this machine? [Y/n] y
 [onesilo-buzz] Installing onesilo-node with Homebrew (builds from source; this can take a few minutes)…
-[onesilo-buzz] Starting the onesilo-node setup wizard — it will ask a few questions.
-   ... the node's wizard runs ...
+[onesilo-buzz] Initializing the node with default settings (first run downloads Ollama and a local model — this can take a while)…
+   ... the node's non-interactive setup runs ...
 [onesilo-buzz] Starting the node…
 [onesilo-buzz] Node is up — distillation will run on this machine.
 
@@ -393,7 +394,8 @@ Verify: `onesilo-buzz --version`.
 
 **Pick a working directory and stay in it.** The agent writes its state
 relative to the current directory — `.silo/agent.key` (its identity) and
-`.silo/oauth.json` (One Silo credential). Running it
+`.silo/oauth.json` (One Silo credential) — and loads `.env` from it too.
+Running it
 from a different directory later means a *new identity* that your workspace
 has never admitted. A dedicated directory such as `~/buzz-agent` is the
 easy way to make every run the same run:
@@ -462,10 +464,9 @@ aren't on this machine. Plaintext remote URLs are refused at startup.
 
 ### 4. Point the agent at your relay
 
-Configuration is environment variables — nothing loads a `.env` file for
-you. Export them in the shell you run the agent from (a `.env` file works
-if you source it: `set -a; . ./.env; set +a`), or use `EnvironmentFile=`
-under systemd (step 8). Minimum:
+Configuration is environment variables. The CLI loads `.env` from the
+working directory on startup; variables already exported in the shell win
+over the file (same precedence as `node --env-file`). Minimum:
 
 ```bash
 # self-hosted Buzz relay
@@ -582,8 +583,9 @@ agent under `launchd` the same way (a `launchd` plist with
 low-ceremony setups.
 
 `WorkingDirectory` is the load-bearing line — it is what keeps the
-identity and credential from step 1 in play; `EnvironmentFile=` is what
-actually loads your `.env` — the agent itself never reads that file.
+identity, credential, and `.env` from step 1 in play. `EnvironmentFile=`
+is optional belt-and-braces — the CLI also loads `.env` from the working
+directory itself, and systemd-provided variables win over the file.
 
 ### 9. Troubleshooting
 
