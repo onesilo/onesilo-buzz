@@ -259,3 +259,16 @@ test("isEntrypoint resolves argv[1] through a symlink", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("node setup runs the node's non-interactive contract (-yes)", async () => {
+  // Without -yes, `onesilo-node setup` launches the node and sits in an
+  // interactive control panel until the operator quits — inside this guided
+  // flow that reads as a hang, and quitting the panel stops the node it
+  // started. The flow must use the non-interactive init and supervise its
+  // own node.
+  const { runNodeSetup } = await import("../src/cli/node-setup.js");
+  const runner = fakeRunner({ present: ["onesilo-node"] });
+  const outcome = await runNodeSetup(() => {}, runner);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(runner.calls, ["onesilo-node setup -yes"]);
+});

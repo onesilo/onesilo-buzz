@@ -72,3 +72,34 @@ test("SILO_SERVER_URL overrides the control-plane default", () => {
     "https://connect.staging.onesilo.com"
   );
 });
+
+test("loadDotEnv loads .env from a working directory; exported vars win", async () => {
+  const { loadDotEnv } = await import("../src/config.js");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "buzz-dotenv-"));
+  const envPath = join(dir, ".env");
+  writeFileSync(
+    envPath,
+    "BUZZ_TEST_DOTENV_ONLY=from_file\nBUZZ_TEST_DOTENV_BOTH=from_file\n"
+  );
+  process.env.BUZZ_TEST_DOTENV_BOTH = "from_shell";
+  try {
+    loadDotEnv(envPath);
+    // The file fills in what the shell didn't set…
+    assert.equal(process.env.BUZZ_TEST_DOTENV_ONLY, "from_file");
+    // …and never overrides what it did (same precedence as node --env-file).
+    assert.equal(process.env.BUZZ_TEST_DOTENV_BOTH, "from_shell");
+  } finally {
+    delete process.env.BUZZ_TEST_DOTENV_ONLY;
+    delete process.env.BUZZ_TEST_DOTENV_BOTH;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadDotEnv is a no-op when the file is absent", async () => {
+  const { loadDotEnv } = await import("../src/config.js");
+  loadDotEnv("/nonexistent/definitely-not-here/.env"); // must not throw
+});

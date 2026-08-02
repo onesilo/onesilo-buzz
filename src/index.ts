@@ -11,11 +11,12 @@
  * walkthrough, run `npm run demo` instead.
  */
 
-import { loadConfig } from "./config.js";
+import { loadConfig, loadDotEnv } from "./config.js";
 import { startAgent, NotPairedError } from "./boot.js";
 
 const log = (line: string) => console.log(`[silo-memory] ${line}`);
 
+loadDotEnv();
 startAgent({ config: loadConfig(), log }).catch((err) => {
   // Not-paired is an expected first-run state with a one-line fix, not a
   // crash: print the instruction without a stack trace burying it.

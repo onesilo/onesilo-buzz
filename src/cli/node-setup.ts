@@ -125,25 +125,33 @@ export async function installNode(
 const FORMULA = "onesilo/tap/onesilo-node";
 
 /**
- * Run the node's own setup wizard, interactively.
+ * Initialize the node's config with its own setup command, non-interactively.
  *
- * The wizard is the node's to own — it asks about modes, compute, remote
- * access, and sign-in, and re-running it is safe because it keeps previous
- * answers as defaults. Shelling out to it rather than reimplementing any of
- * it is the point: there is exactly one description of how a node is
- * configured, and it lives in the node.
+ * `-yes` matters: `onesilo-node setup` without it launches the node and
+ * drops into an interactive control panel that runs until the operator
+ * quits — inside this guided flow that reads as a hang, and quitting the
+ * panel stops the node it started. `-yes` is the node's non-interactive
+ * contract (initialize the config with defaults, download Ollama and the
+ * models if missing, exit without starting the node), which is exactly the
+ * hand-off this flow needs before starting its own supervised node. The
+ * operator already consented to the install in the question that got us
+ * here. Shelling out rather than reimplementing is the point: there is
+ * exactly one description of how a node is configured, and it lives in the
+ * node.
  */
 export async function runNodeSetup(
   log: (line: string) => void,
   runner: Runner = systemRunner
 ): Promise<InstallOutcome> {
-  log("Starting the onesilo-node setup wizard — it will ask a few questions.");
-  const code = await runner.run("onesilo-node", ["setup"]);
+  log(
+    "Initializing the node with default settings (first run downloads Ollama and a local model — this can take a while)…"
+  );
+  const code = await runner.run("onesilo-node", ["setup", "-yes"]);
   if (code !== 0) {
     return {
       ok: false,
       detail:
-        `\`onesilo-node setup\` exited ${code}. Re-run it directly to see what failed:\n` +
+        `\`onesilo-node setup -yes\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
         "  onesilo-node setup",
     };
   }

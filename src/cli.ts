@@ -6,7 +6,10 @@
  *
  *   1. Offer to install a onesilo-node, so distillation happens on this
  *      machine and raw transcripts never leave it.
- *   2. Install it (Homebrew) and hand off to the node's own setup wizard.
+ *   2. Install it (Homebrew) and initialize it with `onesilo-node setup -yes`
+ *      (the node's non-interactive contract; its interactive setup is a
+ *      control panel that runs the node itself, which this flow supervises
+ *      on its own).
  *   3. Put the agent in node-distill mode when a node is actually answering.
  *   4. Start the agent.
  *   5. Print its npub and how to admit it to the relay and its channels.
@@ -23,7 +26,7 @@
 
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadDotEnv } from "./config.js";
 import type { Config } from "./config.js";
 import { startAgent, NotPairedError } from "./boot.js";
 import { askYesNo, type Answer } from "./cli/prompt.js";
@@ -212,6 +215,7 @@ async function runCommand(argv: string[], runner: Runner = systemRunner): Promis
 }
 
 async function main(): Promise<void> {
+  loadDotEnv();
   const [command, ...rest] = process.argv.slice(2);
   switch (command) {
     case "run": {
