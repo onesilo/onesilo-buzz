@@ -413,3 +413,31 @@ test("persistEnvVar collapses pre-existing duplicates to one line", async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SILO_MODE=node with --no-node aborts instead of wiring memory to nothing", async () => {
+  const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
+  const env = { SILO_MODE: "node" } as NodeJS.ProcessEnv;
+  const mode = await resolveDistillMode(loadConfig(env), parseFlags(["--no-node"]), runner);
+  assert.equal(mode, null, "node memory without a node must abort, not continue");
+  assert.deepEqual(runner.calls, []);
+});
+
+test("SILO_MODE=node with explicit DISTILL_MODE still requires the node", async () => {
+  // The DISTILL_MODE early-return used to skip node detection entirely —
+  // with node memory that shipped an agent whose store points at nothing.
+  const runner = fakeRunner({ present: [] }); // no brew, no node binary
+  const prev = process.env.DISTILL_MODE;
+  process.env.DISTILL_MODE = "cloud";
+  try {
+    const mode = await resolveDistillMode(
+      loadConfig({ SILO_MODE: "node" } as NodeJS.ProcessEnv),
+      parseFlags([]),
+      runner
+    );
+    // Node absent, install impossible (no brew): must abort, not return cloud.
+    assert.equal(mode, null);
+  } finally {
+    if (prev === undefined) delete process.env.DISTILL_MODE;
+    else process.env.DISTILL_MODE = prev;
+  }
+});

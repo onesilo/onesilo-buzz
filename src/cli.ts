@@ -92,7 +92,21 @@ async function resolveDistillMode(
   // convention. Checking DISTILL_MODE first meant `DISTILL_MODE=node
   // onesilo-buzz run --no-node` ran node distillation anyway, silently doing the
   // opposite of the flag's documented meaning.
+  // SILO_MODE=node stores MEMORY on the node — the node isn't a
+  // distillation nicety there, it's the database. Every "continue without
+  // a node" path below is therefore closed when nodeMemory is set:
+  // proceeding would wire NodeMemoryStore against nothing and the agent
+  // would look healthy while every memory operation fails.
+  const nodeMemory = config.silo.mode === "node";
+
   if (flags.noNode) {
+    if (nodeMemory) {
+      console.error(
+        "SILO_MODE=node keeps memory on a local onesilo-node — --no-node contradicts it.\n" +
+          "Drop --no-node, or change SILO_MODE in .env."
+      );
+      return null;
+    }
     if (process.env.DISTILL_MODE && process.env.DISTILL_MODE !== "cloud") {
       log(
         `--no-node overrides DISTILL_MODE=${process.env.DISTILL_MODE} — distilling in the cloud.`
@@ -102,20 +116,37 @@ async function resolveDistillMode(
   }
 
   // An explicit DISTILL_MODE is an operator decision already made. Asking
-  // again would be noise, and overriding it would be worse.
-  if (process.env.DISTILL_MODE) {
+  // again would be noise, and overriding it would be worse. With node
+  // memory the setting is honored too — but only after the node itself is
+  // ensured below.
+  if (process.env.DISTILL_MODE && !nodeMemory) {
     log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
     return config.distill;
   }
 
+  const distillDecision = (): "cloud" | "node" => {
+    if (process.env.DISTILL_MODE) {
+      log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
+      return config.distill;
+    }
+    return "node";
+  };
+
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
-    log(`Found a onesilo-node answering at ${config.node.adminUrl} — distilling locally.`);
-    return "node";
+    log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);
+    return distillDecision();
   }
 
-  const answer = await askQuestion(state.kind, flags);
+  const answer = await askQuestion(state.kind, flags, nodeMemory);
   if (answer === "no") {
+    if (nodeMemory) {
+      console.error(
+        "SILO_MODE=node needs a running onesilo-node — it is where memory lives.\n" +
+          "Start one and re-run, or change SILO_MODE in .env to use One Silo instead."
+      );
+      return null;
+    }
     log(
       "Continuing without a node. Raw conversation transcripts will be sent to " +
         "your silo for distillation — only add the agent to channels whose " +
@@ -143,16 +174,23 @@ async function resolveDistillMode(
         "  onesilo-node"
     );
   }
-  log("Node is up — distillation will run on this machine.");
-  return "node";
+  log("Node is up.");
+  return distillDecision();
 }
 
-/** The question, phrased for what is actually on the machine. */
-function askQuestion(kind: "installed" | "absent", flags: Flags): Promise<Answer> {
+/** The question, phrased for what is actually on the machine and at stake. */
+function askQuestion(
+  kind: "installed" | "absent",
+  flags: Flags,
+  nodeMemory: boolean
+): Promise<Answer> {
+  const why = nodeMemory
+    ? "memory lives on it (SILO_MODE=node)"
+    : "memory is retained on this machine";
   const question =
     kind === "installed"
-      ? "A onesilo-node is installed but not running. Set it up and use it so memory is retained on this machine?"
-      : "Install onesilo-node so that memory is retained on this machine?";
+      ? `A onesilo-node is installed but not running. Set it up and use it so ${why}?`
+      : `Install onesilo-node so that ${why}?`;
   return askYesNo(question, {
     default: "yes",
     forced: flags.assumeYes ? "yes" : undefined,
