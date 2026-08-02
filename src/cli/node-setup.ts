@@ -47,7 +47,12 @@ export const systemRunner: Runner = {
   },
   which(command) {
     return new Promise((resolve) => {
-      const child = spawn("command", ["-v", command], { stdio: "ignore", shell: true });
+      // The command name travels as a positional parameter, not string
+      // concatenation into a shell line — that keeps shell metacharacters
+      // inert and avoids Node's DEP0190 warning (args + shell:true).
+      const child = spawn("/bin/sh", ["-c", 'command -v -- "$1"', "sh", command], {
+        stdio: "ignore",
+      });
       child.on("error", () => resolve(false));
       child.on("close", (code) => resolve(code === 0));
     });

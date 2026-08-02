@@ -67,3 +67,31 @@ export async function askYesNo(question: string, opts: AskOptions): Promise<Answ
 function suffix(def: Answer): string {
   return def === "yes" ? "[Y/n]" : "[y/N]";
 }
+
+/**
+ * Ask a free-text question. Enter (or no terminal) takes the default; the
+ * non-interactive path says so, same contract as askYesNo.
+ */
+export async function askText(
+  question: string,
+  opts: { default: string; io?: AskOptions["io"] }
+): Promise<string> {
+  const io = opts.io ?? {
+    input: process.stdin,
+    output: process.stdout,
+    isTTY: Boolean(process.stdin.isTTY),
+  };
+
+  if (!io.isTTY) {
+    io.output.write(`${question} [${opts.default}] ${opts.default}  (no terminal — using the default)\n`);
+    return opts.default;
+  }
+
+  const rl = createInterface({ input: io.input, output: io.output });
+  try {
+    const raw = (await rl.question(`${question} [${opts.default}] `)).trim();
+    return raw || opts.default;
+  } finally {
+    rl.close();
+  }
+}

@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 
 import { askYesNo } from "../src/cli/prompt.js";
 import { buildInvite, formatInvite } from "../src/cli/invite.js";
-import { resolveDistillMode, parseFlags, isEntrypoint } from "../src/cli.js";
+import { resolveDistillMode, parseFlags, isEntrypoint, runCommand, persistEnvVar } from "../src/cli.js";
 import { loadConfig } from "../src/config.js";
 import type { Runner } from "../src/cli/node-setup.js";
 
@@ -271,4 +271,173 @@ test("node setup runs the node's non-interactive contract (-yes)", async () => {
   const outcome = await runNodeSetup(() => {}, runner);
   assert.equal(outcome.ok, true);
   assert.deepEqual(runner.calls, ["onesilo-node setup -yes"]);
+});
+
+test("unpaired mcp mode fails fast, before any node work", async () => {
+  // The original first-run experience: minutes of node install/setup/start,
+  // THEN "not paired", exit — taking the fresh node down too. The pairing
+  // check must come first. Non-TTY (this test runner) takes the fail-fast
+  // path with instructions.
+  const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
+  const prevToken = process.env.SILO_TOKEN_PATH;
+  const prevMode = process.env.SILO_MODE;
+  const prevRelay = process.env.BUZZ_RELAY_URL;
+  process.env.SILO_TOKEN_PATH = "/nonexistent/definitely/oauth.json";
+  delete process.env.SILO_MODE;
+  process.env.BUZZ_RELAY_URL = "ws://localhost:7777"; // skip the relay question
+  try {
+    const code = await runCommand([], runner);
+    assert.equal(code, 1);
+    assert.deepEqual(runner.calls, [], "no node work may happen before the pairing check");
+  } finally {
+    if (prevToken === undefined) delete process.env.SILO_TOKEN_PATH;
+    else process.env.SILO_TOKEN_PATH = prevToken;
+    if (prevMode === undefined) delete process.env.SILO_MODE;
+    else process.env.SILO_MODE = prevMode;
+    if (prevRelay === undefined) delete process.env.BUZZ_RELAY_URL;
+    else process.env.BUZZ_RELAY_URL = prevRelay;
+  }
+});
+
+test("persistEnvVar appends and replaces in .env", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "buzz-persist-"));
+  const prevCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    persistEnvVar("BUZZ_RELAY_URL", "wss://a.example");
+    persistEnvVar("SILO_MODE", "node");
+    persistEnvVar("BUZZ_RELAY_URL", "wss://b.example"); // replace, not duplicate
+    const content = readFileSync(".env", "utf8");
+    assert.match(content, /^BUZZ_RELAY_URL=wss:\/\/b\.example$/m);
+    assert.match(content, /^SILO_MODE=node$/m);
+    assert.equal(content.match(/BUZZ_RELAY_URL=/g)?.length, 1);
+  } finally {
+    process.chdir(prevCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("askText takes typed answers, defaults on Enter and on no terminal", async () => {
+  const { askText } = await import("../src/cli/prompt.js");
+  const typedInput = new PassThrough();
+  typedInput.write("wss://real.example\n");
+  const typed = await askText("Relay?", {
+    default: "ws://localhost:7777",
+    io: { input: typedInput, output: new PassThrough(), isTTY: true },
+  });
+  assert.equal(typed, "wss://real.example");
+
+  const enterInput = new PassThrough();
+  enterInput.write("\n");
+  const entered = await askText("Relay?", {
+    default: "ws://localhost:7777",
+    io: { input: enterInput, output: new PassThrough(), isTTY: true },
+  });
+  assert.equal(entered, "ws://localhost:7777");
+
+  const cap = capture();
+  const headless = await askText("Relay?", {
+    default: "ws://localhost:7777",
+    io: { input: new PassThrough(), output: cap.out, isTTY: false },
+  });
+  assert.equal(headless, "ws://localhost:7777");
+  assert.match(cap.text(), /no terminal/);
+});
+
+test("normalizeRelayUrl accepts every shape people paste", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  assert.equal(
+    normalizeRelayUrl("company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("https://company.communities.buzz.xyz/"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("http://company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("wss://company.communities.buzz.xyz"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(normalizeRelayUrl("ws://localhost:7777"), "ws://localhost:7777");
+  assert.equal(normalizeRelayUrl("  company.example  "), "wss://company.example");
+});
+
+test("normalizeRelayUrl rejects scheme-only and hostless input", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  for (const junk of ["https://", "http://", "http:", "wss://", "///", "/"]) {
+    assert.equal(normalizeRelayUrl(junk), null, `expected null for ${JSON.stringify(junk)}`);
+  }
+});
+
+test("normalizeRelayUrl strips browser paths but honors explicit ws URLs", async () => {
+  const { normalizeRelayUrl } = await import("../src/cli.js");
+  assert.equal(
+    normalizeRelayUrl("https://company.communities.buzz.xyz/channels/eng?tab=1"),
+    "wss://company.communities.buzz.xyz"
+  );
+  assert.equal(
+    normalizeRelayUrl("company.example:8443/some/path"),
+    "wss://company.example:8443"
+  );
+  // Someone typing wss:// with a path knows their endpoint — keep it.
+  assert.equal(
+    normalizeRelayUrl("wss://company.example/relay"),
+    "wss://company.example/relay"
+  );
+});
+
+test("persistEnvVar collapses pre-existing duplicates to one line", async () => {
+  const { mkdtempSync, readFileSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "buzz-persist-dupes-"));
+  const prevCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    writeFileSync(".env", "SILO_MODE=mcp\nBUZZ_RELAY_URL=wss://old.example\nAGENT_HANDLE=x\nBUZZ_RELAY_URL=wss://older.example\n");
+    persistEnvVar("BUZZ_RELAY_URL", "wss://new.example");
+    const content = readFileSync(".env", "utf8");
+    assert.equal(content.match(/BUZZ_RELAY_URL=/g)?.length, 1, "duplicates must collapse");
+    assert.match(content, /^BUZZ_RELAY_URL=wss:\/\/new\.example$/m);
+    assert.match(content, /^SILO_MODE=mcp$/m);
+    assert.match(content, /^AGENT_HANDLE=x$/m);
+  } finally {
+    process.chdir(prevCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("SILO_MODE=node with --no-node aborts instead of wiring memory to nothing", async () => {
+  const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
+  const env = { SILO_MODE: "node" } as NodeJS.ProcessEnv;
+  const mode = await resolveDistillMode(loadConfig(env), parseFlags(["--no-node"]), runner);
+  assert.equal(mode, null, "node memory without a node must abort, not continue");
+  assert.deepEqual(runner.calls, []);
+});
+
+test("SILO_MODE=node with explicit DISTILL_MODE still requires the node", async () => {
+  // The DISTILL_MODE early-return used to skip node detection entirely —
+  // with node memory that shipped an agent whose store points at nothing.
+  const runner = fakeRunner({ present: [] }); // no brew, no node binary
+  const prev = process.env.DISTILL_MODE;
+  process.env.DISTILL_MODE = "cloud";
+  try {
+    const mode = await resolveDistillMode(
+      loadConfig({ SILO_MODE: "node" } as NodeJS.ProcessEnv),
+      parseFlags([]),
+      runner
+    );
+    // Node absent, install impossible (no brew): must abort, not return cloud.
+    assert.equal(mode, null);
+  } finally {
+    if (prev === undefined) delete process.env.DISTILL_MODE;
+    else process.env.DISTILL_MODE = prev;
+  }
 });

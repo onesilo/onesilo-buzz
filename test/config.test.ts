@@ -110,3 +110,10 @@ test("loadDotEnv is a no-op when the file is absent", async () => {
   const { loadDotEnv } = await import("../src/config.js");
   loadDotEnv("/nonexistent/definitely-not-here/.env"); // must not throw
 });
+
+test("the default agent handle is OneSilo", () => {
+  const cfg = loadConfig({} as NodeJS.ProcessEnv);
+  assert.equal(cfg.agentHandle, "OneSilo");
+  const overridden = loadConfig({ AGENT_HANDLE: "silo" } as NodeJS.ProcessEnv);
+  assert.equal(overridden.agentHandle, "silo");
+});

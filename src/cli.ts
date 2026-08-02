@@ -24,12 +24,13 @@
  * fallback they never saw. This CLI would rather stop and say so.
  */
 
-import { realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { loadConfig, loadDotEnv } from "./config.js";
+import { loadConfig, loadDotEnv, DEFAULT_RELAY_URL } from "./config.js";
 import type { Config } from "./config.js";
 import { startAgent, NotPairedError } from "./boot.js";
-import { askYesNo, type Answer } from "./cli/prompt.js";
+import { SiloOAuthClient } from "./silo/oauth.js";
+import { askText, askYesNo, type Answer } from "./cli/prompt.js";
 import {
   detectNode,
   installNode,
@@ -91,7 +92,21 @@ async function resolveDistillMode(
   // convention. Checking DISTILL_MODE first meant `DISTILL_MODE=node
   // onesilo-buzz run --no-node` ran node distillation anyway, silently doing the
   // opposite of the flag's documented meaning.
+  // SILO_MODE=node stores MEMORY on the node — the node isn't a
+  // distillation nicety there, it's the database. Every "continue without
+  // a node" path below is therefore closed when nodeMemory is set:
+  // proceeding would wire NodeMemoryStore against nothing and the agent
+  // would look healthy while every memory operation fails.
+  const nodeMemory = config.silo.mode === "node";
+
   if (flags.noNode) {
+    if (nodeMemory) {
+      console.error(
+        "SILO_MODE=node keeps memory on a local onesilo-node — --no-node contradicts it.\n" +
+          "Drop --no-node, or change SILO_MODE in .env."
+      );
+      return null;
+    }
     if (process.env.DISTILL_MODE && process.env.DISTILL_MODE !== "cloud") {
       log(
         `--no-node overrides DISTILL_MODE=${process.env.DISTILL_MODE} — distilling in the cloud.`
@@ -101,20 +116,37 @@ async function resolveDistillMode(
   }
 
   // An explicit DISTILL_MODE is an operator decision already made. Asking
-  // again would be noise, and overriding it would be worse.
-  if (process.env.DISTILL_MODE) {
+  // again would be noise, and overriding it would be worse. With node
+  // memory the setting is honored too — but only after the node itself is
+  // ensured below.
+  if (process.env.DISTILL_MODE && !nodeMemory) {
     log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
     return config.distill;
   }
 
+  const distillDecision = (): "cloud" | "node" => {
+    if (process.env.DISTILL_MODE) {
+      log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
+      return config.distill;
+    }
+    return "node";
+  };
+
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
-    log(`Found a onesilo-node answering at ${config.node.adminUrl} — distilling locally.`);
-    return "node";
+    log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);
+    return distillDecision();
   }
 
-  const answer = await askQuestion(state.kind, flags);
+  const answer = await askQuestion(state.kind, flags, nodeMemory);
   if (answer === "no") {
+    if (nodeMemory) {
+      console.error(
+        "SILO_MODE=node needs a running onesilo-node — it is where memory lives.\n" +
+          "Start one and re-run, or change SILO_MODE in .env to use One Silo instead."
+      );
+      return null;
+    }
     log(
       "Continuing without a node. Raw conversation transcripts will be sent to " +
         "your silo for distillation — only add the agent to channels whose " +
@@ -142,16 +174,23 @@ async function resolveDistillMode(
         "  onesilo-node"
     );
   }
-  log("Node is up — distillation will run on this machine.");
-  return "node";
+  log("Node is up.");
+  return distillDecision();
 }
 
-/** The question, phrased for what is actually on the machine. */
-function askQuestion(kind: "installed" | "absent", flags: Flags): Promise<Answer> {
+/** The question, phrased for what is actually on the machine and at stake. */
+function askQuestion(
+  kind: "installed" | "absent",
+  flags: Flags,
+  nodeMemory: boolean
+): Promise<Answer> {
+  const why = nodeMemory
+    ? "memory lives on it (SILO_MODE=node)"
+    : "memory is retained on this machine";
   const question =
     kind === "installed"
-      ? "A onesilo-node is installed but not running. Set it up and use it so memory is retained on this machine?"
-      : "Install onesilo-node so that memory is retained on this machine?";
+      ? `A onesilo-node is installed but not running. Set it up and use it so ${why}?`
+      : `Install onesilo-node so that ${why}?`;
   return askYesNo(question, {
     default: "yes",
     forced: flags.assumeYes ? "yes" : undefined,
@@ -169,8 +208,166 @@ function abort(detail?: string): null {
   return null;
 }
 
+/**
+ * First-run community question: with no BUZZ_RELAY_URL anywhere (shell or
+ * .env), ask whether this agent joins a hosted community, and only then
+ * for its URL — a wrong relay presents as "agent runs, nothing happens",
+ * the worst kind of failure to debug. Answering no (or giving no URL)
+ * keeps the localhost dev relay. The URL is persisted to .env in the
+ * working directory so it's asked exactly once.
+ */
+async function ensureRelayUrl(flags: Flags): Promise<void> {
+  if (process.env.BUZZ_RELAY_URL) return;
+  if (flags.assumeYes || !process.stdin.isTTY) return; // scripted/headless runs configure via env
+
+  const hosted = await askYesNo("Connect to a hosted community?", { default: "yes" });
+  if (hosted === "no") {
+    // An explicit "no" is a decision too — persist it, or every future
+    // run re-asks a question that was already answered.
+    process.env.BUZZ_RELAY_URL = DEFAULT_RELAY_URL;
+    persistEnvVar("BUZZ_RELAY_URL", DEFAULT_RELAY_URL);
+    log(`saved BUZZ_RELAY_URL=${DEFAULT_RELAY_URL} (local dev relay) to .env — future runs won't ask.`);
+    return;
+  }
+
+  const entered = await askText(
+    "Community URL (e.g. company.communities.buzz.xyz)",
+    { default: "" }
+  );
+  if (!entered) {
+    process.env.BUZZ_RELAY_URL = DEFAULT_RELAY_URL;
+    persistEnvVar("BUZZ_RELAY_URL", DEFAULT_RELAY_URL);
+    log(`no community URL given — saved the local dev relay (${DEFAULT_RELAY_URL}) to .env.`);
+    return;
+  }
+  const url = normalizeRelayUrl(entered);
+  if (!url) {
+    // A garbled URL is a typo, not a decision: use the dev relay for this
+    // run only and DON'T persist, so the next run asks again.
+    log(
+      `"${entered}" doesn't look like a community URL — using the local dev relay for this run; will ask again next time.`
+    );
+    return;
+  }
+  process.env.BUZZ_RELAY_URL = url;
+  persistEnvVar("BUZZ_RELAY_URL", url);
+  log(`saved BUZZ_RELAY_URL=${url} to .env — future runs won't ask.`);
+}
+
+/**
+ * People paste community addresses in every shape — bare hostname,
+ * https:// from the browser bar (often with a path/query), or a real
+ * wss:// URL. Normalize to the WebSocket form: an explicit ws:// or
+ * wss:// URL passes through unchanged (someone typing that knows their
+ * endpoint, path included); everything else reduces to wss://<host[:port]>
+ * — hosted communities are TLS and serve the relay at the origin, so a
+ * browser path would only break the connection. Returns null when the
+ * input has no usable host (a scheme with nothing behind it, bare
+ * slashes) — a nonsense endpoint must not be persisted as the relay.
+ */
+export function normalizeRelayUrl(input: string): string | null {
+  const s = input.trim().replace(/\/+$/, "");
+  const explicitWs = /^wss?:\/\//i.test(s);
+  const candidate = explicitWs ? s : `wss://${s.replace(/^https?:\/\//i, "")}`;
+  try {
+    const u = new URL(candidate);
+    // Scheme-only input ("http://", "wss:", …) leaves the scheme word
+    // itself parsing as the "hostname". None of those are hosts.
+    if (!u.hostname || /^(https?|wss?)$/i.test(u.hostname)) return null;
+    return explicitWs ? candidate : `wss://${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pairing check, BEFORE any node install/setup/start: SILO_MODE=mcp (the
+ * default) stores memory in One Silo and cannot run unpaired. Discovering
+ * that after minutes of node bootstrap — and then exiting, taking the
+ * supervised node down too — was the original first-run experience, and it
+ * was terrible. Interactive runs can pair right here, or switch to
+ * node-local memory instead; non-interactive runs fail fast with the fix.
+ */
+async function ensurePairedOrRerouted(config: Config, flags: Flags): Promise<boolean> {
+  if (config.silo.mode !== "mcp") return true;
+  let oauth: SiloOAuthClient;
+  try {
+    oauth = new SiloOAuthClient({
+      serverUrl: config.silo.serverUrl,
+      agentHandle: config.agentHandle,
+      tokenPath: config.silo.tokenPath,
+      callbackPort: config.silo.callbackPort,
+    });
+  } catch (err) {
+    // A corrupt credential file must produce instructions, not a stack.
+    console.error(err instanceof Error ? err.message : String(err));
+    return false;
+  }
+  if (oauth.isPaired) return true;
+
+  if (!process.stdin.isTTY) {
+    console.error(
+      "Not paired with One Silo yet (SILO_MODE=mcp stores memory in your silo).\n" +
+        "  Pair:                onesilo-buzz connect\n" +
+        "  Or keep memory local: set SILO_MODE=node in .env (needs a onesilo-node)"
+    );
+    return false;
+  }
+
+  log("The agent needs a memory home. SILO_MODE=mcp (the default) uses your One Silo account.");
+  const pair = await askYesNo(
+    "Pair with One Silo now (opens your browser; one-time)?",
+    { default: "yes", forced: flags.assumeYes ? "yes" : undefined }
+  );
+  if (pair === "yes") {
+    try {
+      await oauth.pair((line) => console.log(line));
+      return true;
+    } catch (err) {
+      // Most likely: callback port in use (a running node holds 8765) or
+      // no browser completion. Say what happened and stop before any node
+      // work — same failure, minus the wasted setup.
+      console.error(`pairing failed: ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
+
+  const useNode = await askYesNo(
+    "Keep memory on a local onesilo-node instead (nothing stored in the cloud)?",
+    { default: "yes" }
+  );
+  if (useNode === "yes") {
+    process.env.SILO_MODE = "node";
+    persistEnvVar("SILO_MODE", "node");
+    log("saved SILO_MODE=node to .env — memory will live on this machine's node.");
+    return true;
+  }
+  console.error("No memory home chosen — run `onesilo-buzz connect` or set SILO_MODE, then re-run.");
+  return false;
+}
+
+/**
+ * Set NAME=value in ./.env (created if missing). Every existing
+ * definition of NAME is removed first — a hand-edited file can carry
+ * duplicates, and replacing only the first would leave a survivor that
+ * still wins at load time.
+ */
+function persistEnvVar(name: string, value: string): void {
+  const path = ".env";
+  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const kept = existing.split("\n").filter((line) => !line.startsWith(`${name}=`));
+  while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+  kept.push(`${name}=${value}`);
+  writeFileSync(path, kept.join("\n") + "\n");
+}
+
 async function runCommand(argv: string[], runner: Runner = systemRunner): Promise<number> {
   const flags = parseFlags(argv);
+
+  await ensureRelayUrl(flags);
+  if (!(await ensurePairedOrRerouted(loadConfig(), flags))) return 1;
+  // Both steps above may have changed process.env (relay URL, SILO_MODE) —
+  // read the config after them, not before.
   const config = loadConfig();
 
   const distill = await resolveDistillMode(config, flags, runner);
@@ -286,4 +483,4 @@ if (isInvokedDirectly()) {
   });
 }
 
-export { runCommand, resolveDistillMode, parseFlags };
+export { runCommand, resolveDistillMode, parseFlags, persistEnvVar };
