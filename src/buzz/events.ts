@@ -53,10 +53,16 @@ export function parseChannelMessage(event: NostrEvent): ChannelMessage | null {
  * Word-boundary mention matcher: "@silo" must not match "@silos".
  * (Trailing `-` and `_` count as handle characters, so "@silo-bot" is a
  * different handle too.)
+ *
+ * The lookbehind guards the other side: an email address or hostname whose
+ * domain part happens to be the handle ("eng@silo.example",
+ * "bob@silo.dev") is not a mention — without it, pasting such an address
+ * made the agent answer uninvited. A mention's `@` starts a token, so any
+ * preceding word/host character disqualifies the match.
  */
 function mentionPattern(handle: string, flags = "i"): RegExp {
   const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`@${escaped}(?![\\w-])`, flags);
+  return new RegExp(`(?<![\\w.-])@${escaped}(?![\\w-])`, flags);
 }
 
 /**

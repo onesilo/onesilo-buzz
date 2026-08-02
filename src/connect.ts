@@ -7,12 +7,17 @@
  *   npm run connect
  */
 
-import { loadConfig } from "./config.js";
+import { loadConfig, loadDotEnv } from "./config.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
 
+loadDotEnv();
 const config = loadConfig();
 if (config.silo.mode !== "mcp") {
-  console.error("SILO_MODE=local needs no pairing. Set SILO_MODE=mcp (default) to connect.");
+  // Name the mode that's actually set: relay/node modes authenticate with
+  // the node key and never pair, local needs no credentials at all.
+  console.error(
+    `SILO_MODE=${config.silo.mode} needs no pairing. Set SILO_MODE=mcp (default) to connect.`
+  );
   process.exit(1);
 }
 

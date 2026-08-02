@@ -1,5 +1,28 @@
 /** Environment-driven configuration. See .env.example for every variable. */
 
+import { existsSync } from "node:fs";
+
+/**
+ * Load `.env` from the working directory into process.env.
+ *
+ * Every entrypoint calls this before loadConfig(). It exists because the
+ * documented flow (`cp .env.example .env`) shipped for months with nothing
+ * actually reading the file — settings landed in the defaults silently.
+ * Node's built-in loader keeps the right precedence: a variable already
+ * exported in the shell wins over the file, same as `node --env-file`.
+ * Idempotent, so the CLI and a dynamically imported entrypoint (connect)
+ * can both call it.
+ */
+export function loadDotEnv(path = ".env"): void {
+  if (!existsSync(path)) return;
+  try {
+    process.loadEnvFile(path);
+  } catch {
+    // Unreadable or malformed file: exported variables still apply, and
+    // failing to boot over an optional file would be worse than ignoring it.
+  }
+}
+
 export interface Config {
   relayUrl: string;
   agentHandle: string;

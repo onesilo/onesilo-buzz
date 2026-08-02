@@ -72,3 +72,41 @@ test("SILO_SERVER_URL overrides the control-plane default", () => {
     "https://connect.staging.onesilo.com"
   );
 });
+
+test("loadDotEnv loads .env from a working directory; exported vars win", async () => {
+  const { loadDotEnv } = await import("../src/config.js");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "buzz-dotenv-"));
+  const envPath = join(dir, ".env");
+  writeFileSync(
+    envPath,
+    "BUZZ_TEST_DOTENV_ONLY=from_file\nBUZZ_TEST_DOTENV_BOTH=from_file\n"
+  );
+  const prevOnly = process.env.BUZZ_TEST_DOTENV_ONLY;
+  const prevBoth = process.env.BUZZ_TEST_DOTENV_BOTH;
+  delete process.env.BUZZ_TEST_DOTENV_ONLY; // must be unset for the fill-in assertion
+  process.env.BUZZ_TEST_DOTENV_BOTH = "from_shell";
+  try {
+    loadDotEnv(envPath);
+    // The file fills in what the shell didn't set…
+    assert.equal(process.env.BUZZ_TEST_DOTENV_ONLY, "from_file");
+    // …and never overrides what it did (same precedence as node --env-file).
+    assert.equal(process.env.BUZZ_TEST_DOTENV_BOTH, "from_shell");
+  } finally {
+    // Restore, don't blindly delete — the runner's environment may have
+    // set these, and clobbering them would leak state into later tests.
+    if (prevOnly === undefined) delete process.env.BUZZ_TEST_DOTENV_ONLY;
+    else process.env.BUZZ_TEST_DOTENV_ONLY = prevOnly;
+    if (prevBoth === undefined) delete process.env.BUZZ_TEST_DOTENV_BOTH;
+    else process.env.BUZZ_TEST_DOTENV_BOTH = prevBoth;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadDotEnv is a no-op when the file is absent", async () => {
+  const { loadDotEnv } = await import("../src/config.js");
+  loadDotEnv("/nonexistent/definitely-not-here/.env"); // must not throw
+});

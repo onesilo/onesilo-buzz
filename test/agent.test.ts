@@ -460,3 +460,10 @@ test("ignores its own published events", async () => {
   // its own event echoed back from the relay.
   assert.equal(store.size, 1);
 });
+
+test("an email or hostname containing the handle is not a mention", async () => {
+  const { relay, say } = await setup();
+  say("ping eng@silo.example about the rollout, or bob@silo.dev");
+  await settle();
+  assert.equal(relay.published.length, 0); // pasted addresses must not summon the agent
+});
