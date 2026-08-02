@@ -19,6 +19,7 @@ import {
   parseChannelMessage,
   isAddressedTo,
   stripMention,
+  buildProfile,
   buildReply,
   type ChannelMessage,
 } from "./buzz/events.js";
@@ -97,6 +98,16 @@ export class SiloMemoryAgent {
 
   async start(): Promise<void> {
     await this.relay.connect();
+    // Announce who we are before subscribing: without a kind 0 the client
+    // has no name for this pubkey and shows raw hex everywhere the agent
+    // appears. Non-fatal — a workspace that rejects profile writes should
+    // still get a working agent, just an unnamed one.
+    try {
+      await this.relay.publish(buildProfile(this.identity.handle));
+      this.log(`published profile as @${this.identity.handle}`);
+    } catch (err) {
+      this.log(`could not publish the agent profile (continuing unnamed): ${err}`);
+    }
     this.relay.subscribeChannels(this.options.channelIds ?? [], (event) => {
       // Events are processed strictly in arrival order: a !recall must see
       // the memories of every message delivered before it, and a redelivered

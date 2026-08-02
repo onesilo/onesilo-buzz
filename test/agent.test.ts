@@ -16,6 +16,11 @@ async function setup() {
   const store = new LocalSiloStore();
   const agent = new SiloMemoryAgent(relay, store, identity);
   await agent.start();
+  // The kind 0 profile is published on start; keep it for tests that
+  // assert on it, but hand back a relay whose `published` means "replies"
+  // — every assertion here is about what the agent SAYS.
+  const profile = relay.published.find((e) => e.kind === 0);
+  relay.published = relay.published.filter((e) => e.kind !== 0);
   const userSk = generateSecretKey();
   const say = (content: string, channelId = "eng", extraTags: string[][] = []) =>
     relay.deliver(
@@ -29,7 +34,7 @@ async function setup() {
         userSk
       )
     );
-  return { identity, relay, store, say };
+  return { identity, relay, store, say, profile };
 }
 
 // FakeRelay delivery is synchronous but agent handlers are async; drain them.
@@ -276,6 +281,7 @@ test("silo errors on commands produce an apologetic reply", async () => {
   };
   const agent = new SiloMemoryAgent(relay, failing, identity);
   await agent.start();
+  relay.published = relay.published.filter((e) => e.kind !== 0); // drop the profile
   relay.deliver(
     finalizeEvent(
       {
@@ -466,4 +472,37 @@ test("an email or hostname containing the handle is not a mention", async () => 
   say("ping eng@silo.example about the rollout, or bob@silo.dev");
   await settle();
   assert.equal(relay.published.length, 0); // pasted addresses must not summon the agent
+});
+
+test("the agent publishes a kind 0 profile so clients show a name", async () => {
+  const { identity, profile } = await setup();
+  assert.ok(profile, "expected a kind 0 metadata event on start");
+  assert.equal(profile!.pubkey, identity.pubkey);
+  const meta = JSON.parse(profile!.content) as { name?: string; display_name?: string };
+  assert.equal(meta.name, identity.handle);
+  assert.equal(meta.display_name, identity.handle);
+});
+
+test("a failed profile publish does not stop the agent", async () => {
+  // A workspace that refuses metadata writes must still get a working
+  // agent — unnamed is a cosmetic loss, not a functional one.
+  const { FakeRelay } = await import("../src/buzz/fake-relay.js");
+  const { loadIdentity } = await import("../src/buzz/identity.js");
+  const { LocalSiloStore } = await import("../src/silo/local.js");
+  const { SiloMemoryAgent } = await import("../src/agent.js");
+
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const realPublish = relay.publish.bind(relay);
+  relay.publish = async (t) => {
+    if (t.kind === 0) throw new Error("metadata rejected");
+    return realPublish(t);
+  };
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start(); // must not throw
+  assert.match(logs.join("\n"), /continuing unnamed/);
+  await agent.stop();
 });

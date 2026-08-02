@@ -19,6 +19,14 @@ import type { Event as NostrEvent, EventTemplate } from "nostr-tools";
 
 export const KIND_CHANNEL_MESSAGE = 9;
 
+/**
+ * NIP-01 kind 0 (`set_metadata`) — the only way a Nostr client learns a
+ * pubkey's name. Without one, Buzz has nothing to show and falls back to
+ * the raw hex key, so the agent appears in the member list as
+ * "c1afa654…a77a" rather than "@OneSilo".
+ */
+export const KIND_METADATA = 0;
+
 export const CHANNEL_TAG = "h";
 
 export interface ChannelMessage {
@@ -83,6 +91,29 @@ export function isAddressedTo(
 /** Remove @handle mentions from a message, for treating the rest as a query. */
 export function stripMention(content: string, handle: string): string {
   return content.replace(mentionPattern(handle, "gi"), "").trim();
+}
+
+/**
+ * The agent's profile event. Kind 0 is replaceable, so publishing it on
+ * every start is idempotent and keeps the displayed name in step with
+ * AGENT_HANDLE if it changes.
+ *
+ * Deliberately no `bot: true` (NIP-24): in Buzz an agent is a member, not
+ * a bot, and clients that dim or filter bots would hide it.
+ */
+export function buildProfile(handle: string): EventTemplate {
+  return {
+    kind: KIND_METADATA,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [],
+    content: JSON.stringify({
+      name: handle,
+      display_name: handle,
+      about:
+        "Long-term memory for this workspace, powered by One Silo. " +
+        `Ask "@${handle} what do you remember?", or !remember something.`,
+    }),
+  };
 }
 
 /** Build an unsigned reply in the same channel (and thread, if any). */
