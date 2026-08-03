@@ -24,6 +24,8 @@ export function loadDotEnv(path = ".env"): void {
 }
 
 export interface Config {
+  /** Which of the three tiers this configuration adds up to. */
+  memoryMode: MemoryMode;
   relayUrl: string;
   agentHandle: string;
   /** Avatar URL published in the kind 0 profile (NIP-01 `picture`). */
@@ -97,10 +99,16 @@ export const DEFAULT_RELAY_URL = "ws://localhost:7777";
 const SILO_MODES = new Set(["mcp", "local", "relay", "node"]);
 
 export function loadConfig(env = process.env): Config {
+  const tier = resolveTier(env);
   const mode = SILO_MODES.has(env.SILO_MODE ?? "")
     ? (env.SILO_MODE as "mcp" | "local" | "relay" | "node")
-    : "mcp";
+    : tier.siloMode;
+  const distill = resolveDistill(env, mode, tier);
   return {
+    // Named after what the configuration actually adds up to, not what was
+    // asked for: someone who sets SILO_MODE/DISTILL_MODE directly should
+    // still be told which tier they landed in.
+    memoryMode: describeTier(mode, distill),
     relayUrl: env.BUZZ_RELAY_URL ?? DEFAULT_RELAY_URL,
     agentHandle: env.AGENT_HANDLE ?? "OneSilo",
     // Defaults to the One Silo mark already served from the marketing site.
@@ -137,9 +145,110 @@ export function loadConfig(env = process.env): Config {
         key: env.NODE_KEY,
       };
     })(),
-    distill: env.DISTILL_MODE === "node" ? "node" : "cloud",
+    // Derived HERE rather than in the CLI, so it is a property of the
+    // configuration and not of how the process was launched. It used to be
+    // resolved during `onesilo-buzz run`, which meant `npm start` with
+    // SILO_MODE=node silently fell back to heuristic extraction while a
+    // local model sat idle on the node.
+    distill,
     silo: siloConfig(mode, env),
   };
+}
+
+/**
+ * The three memory tiers, in plain terms:
+ *
+ *  - `local`  — nothing leaves the machine. A local model distills; memories
+ *               live in the node's own store. No enrichment, and recall is
+ *               a ranked list rather than a composed answer.
+ *  - `hybrid` — a local model distills, and only the distilled statements
+ *               reach your silo, where they are enriched. Raw conversation
+ *               never leaves.
+ *  - `cloud`  — raw transcripts go to your silo, which distills them with
+ *               full turn context and enriches. Best recall; least local.
+ *
+ * MEMORY_MODE is the knob most people should touch. SILO_MODE and
+ * DISTILL_MODE still work and still win, because they were the interface
+ * before this existed and people have them in .env files.
+ */
+export type MemoryMode = "local" | "hybrid" | "cloud";
+
+const TIERS: Record<MemoryMode, { siloMode: "node" | "mcp"; distill: "node" | "cloud" }> = {
+  local: { siloMode: "node", distill: "node" },
+  hybrid: { siloMode: "mcp", distill: "node" },
+  cloud: { siloMode: "mcp", distill: "cloud" },
+};
+
+function resolveTier(env: NodeJS.ProcessEnv): {
+  name: MemoryMode;
+  siloMode: "node" | "mcp";
+  distill: "node" | "cloud";
+} {
+  const requested = env.MEMORY_MODE?.trim().toLowerCase();
+  if (requested && requested in TIERS) {
+    const tier = TIERS[requested as MemoryMode];
+    return { name: requested as MemoryMode, ...tier };
+  }
+  if (requested) {
+    throw new Error(
+      `MEMORY_MODE must be one of local, hybrid, cloud (got "${env.MEMORY_MODE}").`
+    );
+  }
+  return { name: "cloud", ...TIERS.cloud };
+}
+
+/**
+ * Which tier a resolved (storage, distillation) pair adds up to.
+ *
+ * `local` covers every configuration where nothing reaches the control
+ * plane — node storage, and the on-disk demo store. `hybrid` is the one
+ * that distills locally but syncs the results. Everything else is `cloud`.
+ */
+function describeTier(
+  mode: "mcp" | "local" | "relay" | "node",
+  distill: "node" | "cloud"
+): MemoryMode {
+  if (mode === "node" || mode === "local") return "local";
+  return distill === "node" ? "hybrid" : "cloud";
+}
+
+/**
+ * Distillation mode, with node storage implying node distillation.
+ *
+ * Storing memories on a node while extracting them with the agent's
+ * keyword heuristics is a coherent thing to *write* and almost never a
+ * coherent thing to *want* — the model that would do it properly is
+ * already running on that node. So node storage defaults to node
+ * distillation, and an explicit DISTILL_MODE still overrides (loudly, at
+ * boot, where the operator can see what it costs).
+ */
+function resolveDistill(
+  env: NodeJS.ProcessEnv,
+  mode: "mcp" | "local" | "relay" | "node",
+  tier: { distill: "node" | "cloud" }
+): "node" | "cloud" {
+  if (env.DISTILL_MODE === "node") return "node";
+  if (env.DISTILL_MODE === "cloud") return "cloud";
+  if (mode === "node") return "node";
+  return env.SILO_MODE ? "cloud" : tier.distill;
+}
+
+/**
+ * A configuration that is legal but almost certainly a mistake, described
+ * in terms of what it costs rather than what it is. Empty when fine.
+ */
+export function configWarnings(config: Config, env = process.env): string[] {
+  const warnings: string[] = [];
+  if (config.silo.mode === "node" && env.DISTILL_MODE === "cloud") {
+    warnings.push(
+      "DISTILL_MODE=cloud with SILO_MODE=node: memories are stored on your " +
+        "node, but distilled by the agent's keyword heuristics — one turn at " +
+        "a time, with no cross-turn context — while the node's model sits " +
+        "unused. Drop DISTILL_MODE (or set it to `node`) unless this is " +
+        "deliberate."
+    );
+  }
+  return warnings;
 }
 
 function siloConfig(

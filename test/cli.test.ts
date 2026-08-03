@@ -14,9 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { askYesNo } from "../src/cli/prompt.js";
+import { askYesNo, askChoice } from "../src/cli/prompt.js";
 import { buildInvite, formatInvite } from "../src/cli/invite.js";
-import { resolveDistillMode, parseFlags, isEntrypoint, runCommand, persistEnvVar } from "../src/cli.js";
+import { resolveMemoryMode, parseFlags, isEntrypoint, runCommand, persistEnvVar } from "../src/cli.js";
 import { loadConfig } from "../src/config.js";
 import type { Runner } from "../src/cli/node-setup.js";
 
@@ -125,15 +125,18 @@ test("the invite carries both npub and hex, and the add-member command", () => {
   assert.ok(text.includes("wss://relay.example"));
 });
 
-test("an explicit DISTILL_MODE is left alone and asks nothing", async () => {
+test("an explicit DISTILL_MODE is honored, and its node is ensured", async () => {
+  // DISTILL_MODE=node with a cloud silo IS hybrid; the tier is named after
+  // where the config landed. It also now ensures the node actually exists,
+  // which the old early-return skipped — leaving the distilling store
+  // wired to nothing and captures buffering forever.
   const runner = fakeRunner({ present: [] });
   const env = { ...process.env, DISTILL_MODE: "node" };
   const prev = process.env.DISTILL_MODE;
   process.env.DISTILL_MODE = "node";
   try {
-    const mode = await resolveDistillMode(loadConfig(env), parseFlags([]), runner);
-    assert.equal(mode, "node");
-    assert.deepEqual(runner.calls, []); // nothing installed, nothing set up
+    const mode = await resolveMemoryMode(loadConfig(env), parseFlags([]), runner);
+    assert.equal(mode, null, "no node and none installable — abort, don't pretend");
   } finally {
     if (prev === undefined) delete process.env.DISTILL_MODE;
     else process.env.DISTILL_MODE = prev;
@@ -145,7 +148,7 @@ test("--no-node skips the node entirely", async () => {
   const prev = process.env.DISTILL_MODE;
   delete process.env.DISTILL_MODE;
   try {
-    const mode = await resolveDistillMode(loadConfig({}), parseFlags(["--no-node"]), runner);
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags(["--no-node"]), runner);
     assert.equal(mode, "cloud");
     assert.deepEqual(runner.calls, []);
   } finally {
@@ -163,7 +166,7 @@ test("--no-node overrides an explicit DISTILL_MODE=node", async () => {
   process.env.DISTILL_MODE = "node";
   try {
     const env = { ...process.env, DISTILL_MODE: "node" };
-    const mode = await resolveDistillMode(loadConfig(env), parseFlags(["--no-node"]), runner);
+    const mode = await resolveMemoryMode(loadConfig(env), parseFlags(["--no-node"]), runner);
     assert.equal(mode, "cloud");
     assert.deepEqual(runner.calls, []); // no detect, no install, no setup
   } finally {
@@ -180,7 +183,7 @@ test("without Homebrew the run aborts instead of distilling in the cloud", async
   const prev = process.env.DISTILL_MODE;
   delete process.env.DISTILL_MODE;
   try {
-    const mode = await resolveDistillMode(loadConfig({}), parseFlags(["--yes"]), runner);
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags(["--yes"]), runner);
     assert.equal(mode, null, "expected an abort, not a cloud fallback");
   } finally {
     if (prev !== undefined) process.env.DISTILL_MODE = prev;
@@ -192,7 +195,7 @@ test("a failed `brew install` aborts rather than falling back", async () => {
   const prev = process.env.DISTILL_MODE;
   delete process.env.DISTILL_MODE;
   try {
-    const mode = await resolveDistillMode(loadConfig({}), parseFlags(["--yes"]), runner);
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags(["--yes"]), runner);
     assert.equal(mode, null);
     assert.ok(runner.calls.some((c) => c.startsWith("brew install")));
     // Setup must not have been attempted after a failed install.
@@ -209,7 +212,7 @@ test("answering no continues in cloud mode without installing anything", async (
   try {
     // No TTY in the test process, and the default is "yes" — so force the
     // no-path the way `onesilo-buzz run --no-node` does.
-    const mode = await resolveDistillMode(loadConfig({}), parseFlags(["--no-node"]), runner);
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags(["--no-node"]), runner);
     assert.equal(mode, "cloud");
     assert.deepEqual(runner.calls, []);
   } finally {
@@ -417,7 +420,7 @@ test("persistEnvVar collapses pre-existing duplicates to one line", async () => 
 test("SILO_MODE=node with --no-node aborts instead of wiring memory to nothing", async () => {
   const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
   const env = { SILO_MODE: "node" } as NodeJS.ProcessEnv;
-  const mode = await resolveDistillMode(loadConfig(env), parseFlags(["--no-node"]), runner);
+  const mode = await resolveMemoryMode(loadConfig(env), parseFlags(["--no-node"]), runner);
   assert.equal(mode, null, "node memory without a node must abort, not continue");
   assert.deepEqual(runner.calls, []);
 });
@@ -429,7 +432,7 @@ test("SILO_MODE=node with explicit DISTILL_MODE still requires the node", async 
   const prev = process.env.DISTILL_MODE;
   process.env.DISTILL_MODE = "cloud";
   try {
-    const mode = await resolveDistillMode(
+    const mode = await resolveMemoryMode(
       loadConfig({ SILO_MODE: "node" } as NodeJS.ProcessEnv),
       parseFlags([]),
       runner
@@ -440,4 +443,145 @@ test("SILO_MODE=node with explicit DISTILL_MODE still requires the node", async 
     if (prev === undefined) delete process.env.DISTILL_MODE;
     else process.env.DISTILL_MODE = prev;
   }
+});
+
+test("--yes keeps recommending a node, not the cloud", async () => {
+  // Naming the tiers must not quietly move scripted installs onto a less
+  // private path. Before the tiers existed, the default answer installed a
+  // node and distilled locally against a cloud silo — which is `hybrid`.
+  //
+  // With nothing installable, a node-requiring tier aborts. A default of
+  // `cloud` would have returned "cloud" happily, so the abort is what
+  // proves the recommendation still involves a node.
+  const runner = fakeRunner({ present: [] });
+  const prev = { silo: process.env.SILO_MODE, distill: process.env.DISTILL_MODE, mem: process.env.MEMORY_MODE };
+  delete process.env.SILO_MODE;
+  delete process.env.DISTILL_MODE;
+  delete process.env.MEMORY_MODE;
+  try {
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags(["--yes"]), runner);
+    assert.equal(mode, null, "the recommended tier still needs a node");
+  } finally {
+    if (prev.silo !== undefined) process.env.SILO_MODE = prev.silo;
+    if (prev.distill !== undefined) process.env.DISTILL_MODE = prev.distill;
+    if (prev.mem !== undefined) process.env.MEMORY_MODE = prev.mem;
+  }
+});
+
+test("MEMORY_MODE=cloud needs no node and asks nothing", async () => {
+  const runner = fakeRunner({ present: [] });
+  const prev = process.env.MEMORY_MODE;
+  process.env.MEMORY_MODE = "cloud";
+  try {
+    const mode = await resolveMemoryMode(
+      loadConfig({ ...process.env, MEMORY_MODE: "cloud" }),
+      parseFlags([]),
+      runner
+    );
+    assert.equal(mode, "cloud");
+    assert.deepEqual(runner.calls, [], "cloud mode touches no local tooling");
+  } finally {
+    if (prev === undefined) delete process.env.MEMORY_MODE;
+    else process.env.MEMORY_MODE = prev;
+  }
+});
+
+test("MEMORY_MODE=local without a usable node aborts rather than syncing", async () => {
+  // The whole point of choosing local is that nothing leaves the machine.
+  // Falling back to a cloud silo would be the exact opposite of the request.
+  const runner = fakeRunner({ present: [] });
+  const prev = process.env.MEMORY_MODE;
+  process.env.MEMORY_MODE = "local";
+  try {
+    const mode = await resolveMemoryMode(
+      loadConfig({ ...process.env, MEMORY_MODE: "local" }),
+      parseFlags(["--yes"]),
+      runner
+    );
+    assert.equal(mode, null);
+  } finally {
+    if (prev === undefined) delete process.env.MEMORY_MODE;
+    else process.env.MEMORY_MODE = prev;
+  }
+});
+
+test("--no-node contradicts local mode and refuses instead of downgrading", async () => {
+  const runner = fakeRunner({ present: ["brew"] });
+  const prev = process.env.MEMORY_MODE;
+  process.env.MEMORY_MODE = "local";
+  try {
+    const mode = await resolveMemoryMode(
+      loadConfig({ ...process.env, MEMORY_MODE: "local" }),
+      parseFlags(["--no-node"]),
+      runner
+    );
+    assert.equal(mode, null);
+    assert.deepEqual(runner.calls, []);
+  } finally {
+    if (prev === undefined) delete process.env.MEMORY_MODE;
+    else process.env.MEMORY_MODE = prev;
+  }
+});
+
+const TIER_CHOICES = [
+  { value: "hybrid" as const, label: "Hybrid", lines: ["Raw conversation never leaves."] },
+  { value: "cloud" as const, label: "Cloud", lines: ["Transcripts are sent to your silo."] },
+  { value: "local" as const, label: "Local", lines: ["No enrichment."] },
+];
+
+test("askChoice prints each option's trade-off, not just its name", async () => {
+  // The point of the picker is that the consequence is visible at the
+  // moment of choosing. A list of bare mode names would be no better than
+  // the yes/no about installing a dependency that it replaced.
+  const input = new PassThrough();
+  const { out, text } = capture();
+  const answer = askChoice("Where should memory live?", TIER_CHOICES, {
+    default: "hybrid",
+    io: { input, output: out, isTTY: true },
+  });
+  input.write("2\n");
+  assert.equal(await answer, "cloud");
+
+  const shown = text();
+  assert.match(shown, /Raw conversation never leaves/);
+  assert.match(shown, /Transcripts are sent to your silo/);
+  assert.match(shown, /No enrichment/);
+  assert.match(shown, /Hybrid \(default\)/, "the recommendation must be marked");
+});
+
+test("askChoice accepts the mode name as well as its number", async () => {
+  // Anyone who read the docs will type "local" rather than counting.
+  const input = new PassThrough();
+  const answer = askChoice("Where should memory live?", TIER_CHOICES, {
+    default: "hybrid",
+    io: { input, output: new PassThrough(), isTTY: true },
+  });
+  input.write("local\n");
+  assert.equal(await answer, "local");
+});
+
+test("askChoice re-asks rather than guessing at an unrecognised answer", async () => {
+  // This gates where a workspace's conversation ends up; a shrug must not
+  // resolve to the default.
+  const input = new PassThrough();
+  const { out, text } = capture();
+  const answer = askChoice("Where should memory live?", TIER_CHOICES, {
+    default: "hybrid",
+    io: { input, output: out, isTTY: true },
+  });
+  input.write("maybe\n");
+  await new Promise((r) => setTimeout(r, 10));
+  input.write("3\n");
+  assert.equal(await answer, "local");
+  assert.match(text(), /Please answer 1-3/);
+});
+
+test("askChoice takes the default without a TTY, and says which", async () => {
+  const { out, text } = capture();
+  const answer = await askChoice("Where should memory live?", TIER_CHOICES, {
+    default: "hybrid",
+    io: { input: new PassThrough(), output: out, isTTY: false },
+  });
+  assert.equal(answer, "hybrid");
+  assert.match(text(), /using hybrid \(no terminal\)/);
 });

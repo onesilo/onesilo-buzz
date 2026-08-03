@@ -95,3 +95,77 @@ export async function askText(
     rl.close();
   }
 }
+
+export interface Choice<T extends string> {
+  value: T;
+  /** Short label, e.g. "Local". */
+  label: string;
+  /** What it does, in terms of consequence rather than configuration. */
+  lines: string[];
+}
+
+export interface AskChoiceOptions<T extends string> {
+  default: T;
+  /** Forces the answer without asking (--yes, or an env var already set). */
+  forced?: T;
+  io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream; isTTY: boolean };
+}
+
+/**
+ * Ask a multiple-choice question, printing each option with its tradeoffs.
+ *
+ * Deliberately not a yes/no about a dependency. Where a workspace's
+ * conversation ends up is the most consequential decision in this setup and
+ * the least visible one, so it is asked directly, with what each answer
+ * costs written next to it — rather than inferred from "shall I install
+ * this program?".
+ */
+export async function askChoice<T extends string>(
+  question: string,
+  choices: Choice<T>[],
+  opts: AskChoiceOptions<T>
+): Promise<T> {
+  if (opts.forced) return opts.forced;
+
+  const io = opts.io ?? {
+    input: process.stdin,
+    output: process.stdout,
+    isTTY: Boolean(process.stdin.isTTY),
+  };
+
+  const numbered = choices.map((c, i) => ({ ...c, key: String(i + 1) }));
+  const defaultKey = numbered.find((c) => c.value === opts.default)?.key ?? "1";
+
+  if (!io.isTTY) {
+    io.output.write(
+      `${question} — using ${opts.default} (no terminal)\n`
+    );
+    return opts.default;
+  }
+
+  io.output.write(`\n${question}\n\n`);
+  for (const choice of numbered) {
+    const marker = choice.value === opts.default ? " (default)" : "";
+    io.output.write(`  ${choice.key}. ${choice.label}${marker}\n`);
+    for (const line of choice.lines) io.output.write(`     ${line}\n`);
+    io.output.write("\n");
+  }
+
+  const rl = createInterface({ input: io.input, output: io.output });
+  try {
+    for (;;) {
+      const raw = (await rl.question(`Choose 1-${numbered.length} [${defaultKey}]: `))
+        .trim()
+        .toLowerCase();
+      if (raw === "") return opts.default;
+      const byKey = numbered.find((c) => c.key === raw);
+      if (byKey) return byKey.value;
+      // Accept the name too — someone who read the docs will type "hybrid".
+      const byName = numbered.find((c) => c.value === raw);
+      if (byName) return byName.value;
+      io.output.write(`Please answer 1-${numbered.length}, or the mode name.\n`);
+    }
+  } finally {
+    rl.close();
+  }
+}

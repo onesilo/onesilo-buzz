@@ -12,7 +12,7 @@
 
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Config } from "./config.js";
+import { configWarnings, type Config, type MemoryMode } from "./config.js";
 import { loadIdentity, exportSecretKeyHex, resolveAgentSecretKeyHex } from "./buzz/identity.js";
 import type { AgentIdentity } from "./buzz/identity.js";
 import { WebSocketRelay } from "./buzz/relay.js";
@@ -158,6 +158,19 @@ function buildStore(
   return new LocalSiloStore(config.silo.path);
 }
 
+/**
+ * One line per tier, stated as what it does with your conversation rather
+ * than which variables it set.
+ */
+const TIER_SUMMARY: Record<MemoryMode, string> = {
+  local:
+    "nothing leaves this machine; distilled and stored on your node, no cloud enrichment",
+  hybrid:
+    "distilled on this machine; only the statements reach your silo, where they are enriched",
+  cloud:
+    "transcripts are sent to your silo, distilled there with full context and enriched",
+};
+
 /** SILO_MODE=mcp with no completed OAuth pairing. */
 export class NotPairedError extends Error {
   constructor() {
@@ -175,6 +188,12 @@ export class NotPairedError extends Error {
  */
 export async function startAgent(opts: BootOptions): Promise<RunningAgent> {
   const { config, log } = opts;
+
+  // Say which tier this is before anything else. Where memory goes is the
+  // decision with the most consequence and the least visibility — every
+  // other startup line describes plumbing.
+  log(`memory mode: ${config.memoryMode} — ${TIER_SUMMARY[config.memoryMode]}`);
+  for (const warning of configWarnings(config)) log(`warning: ${warning}`);
 
   const identity = resolveIdentity(config, log);
 
