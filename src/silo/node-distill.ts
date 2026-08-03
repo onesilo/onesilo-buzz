@@ -15,6 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { since } from "../log.js";
 import type { TranscriptSegment, Turn } from "../memory/window.js";
 import type {
   Memory,
@@ -64,7 +65,15 @@ export class NodeDistillingStore implements MemoryStore {
    * raw transcript, which is exactly what this mode exists to prevent.
    */
   async rememberTranscript(segment: TranscriptSegment): Promise<RememberOutcome> {
+    // The single slowest thing the agent does: a local model, often cold,
+    // with a two-minute ceiling. Bracket it so a long wait is visibly the
+    // model thinking rather than the agent having stopped.
+    const started = Date.now();
+    this.log(
+      `distilling ${segment.fresh.length} turn(s) from #${segment.channelId} on the local model…`
+    );
     const { text, model } = await this.node.generate(distillPrompt(segment));
+    this.log(`local model (${model}) replied in ${since(started)}`);
     const statements = parseStatements(text);
     if (statements.length === 0) {
       this.log(`node distillation (${model}): nothing durable in segment #${segment.channelId}`);

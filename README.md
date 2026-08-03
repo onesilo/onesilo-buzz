@@ -549,6 +549,27 @@ Then check the pieces that fail quietly:
   `curl -s -H "Authorization: Bearer $(cat ~/.onesilo-node/admin.token)" http://127.0.0.1:8766/v1/status | jq`
 - shape A/B: the memories appear in your silo in the One Silo dashboard.
 
+**Reading the log while you wait.** The agent narrates each turn, so a
+slow reply tells you *where* it is slow rather than looking like a hang:
+
+```
+3bcc67b3 thinking about a mention in #general from @shawn: "what do you remember?"
+searching memory for: "what do you remember?"
+memory search returned 3 result(s) in 240ms
+replied in general: I remember 3 things…
+3bcc67b3 done in 291ms
+```
+
+The two lines worth knowing:
+
+- `distilling N turn(s) … on the local model…` followed by
+  `local model (llama3.2) replied in 48.3s` — a local model doing its job.
+  If the second line takes tens of seconds every time, the model is too big
+  for the machine; pull a smaller one.
+- `… is waiting on 1 earlier message(s)` — turns are handled strictly in
+  order, so a slow distillation stalls everything behind it. Persistent
+  waits mean capture is the bottleneck, not the relay.
+
 ### 8. Keep it running
 
 The agent is a single long-lived process; the node (if any) is a second
@@ -596,6 +617,7 @@ directory itself, and systemd-provided variables win over the file.
 | Replies in one channel, deaf in another | channel membership, or `BUZZ_CHANNEL_IDS` excludes it | add to channel / widen the variable |
 | `onesilo-buzz connect` fails to open callback | port 8765 taken (usually the node's LAN API) | `SILO_OAUTH_CALLBACK_PORT=8770 onesilo-buzz connect` |
 | Memory stopped updating (node shapes) | node down — captures buffer, never fall back to cloud | start the node; buffered captures flush on recovery |
+| Replies take tens of seconds | local model is slow — check `local model (...) replied in Ns` in the log | pull a smaller model on the node, or accept the latency |
 | Startup refuses `NODE_URL` | non-loopback node URL without the explicit opt-in | keep the node local, or `NODE_ALLOW_REMOTE=1` + `https://` |
 | New/unknown identity after a move | ran from a different directory → fresh `.silo/agent.key` | run from the original directory or set `AGENT_SECRET_KEY` |
 | `brew install` refuses the formula | tap not trusted | `brew trust --formula onesilo/tap/onesilo-buzz` (and `…/onesilo-node`) |

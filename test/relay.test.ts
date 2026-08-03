@@ -203,8 +203,12 @@ test("an auth-required relay ends up with a live subscription", async () => {
     });
     relay.subscribeChannels([], () => {});
 
-    await waitFor(() => reqsAfterAuth.length >= 1, 5000);
+    // Wait on the CLIENT's end state, not the server's counter: the server
+    // increments reqsAfterAuth while its OK and EOSE are still on the wire,
+    // so waiting on it can assert against logs the client hasn't read yet.
+    await waitFor(() => logs.join("\n").includes("is live"), 5000);
     const text = logs.join("\n");
+    assert.ok(reqsAfterAuth.length >= 1, "the relay should have served a REQ after auth");
     assert.match(text, /authenticated with the relay/);
     assert.match(text, /is live/, "the agent must confirm a live subscription");
     assert.ok(rejectedEvents >= 1, "the pre-auth publish should have been refused");
