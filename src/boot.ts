@@ -197,6 +197,7 @@ export async function startAgent(opts: BootOptions): Promise<RunningAgent> {
   const relay = new WebSocketRelay(config.relayUrl, identity, log);
   const agent = new SiloMemoryAgent(relay, store, identity, {
     channelIds: config.channelIds,
+    pictureUrl: config.agentPictureUrl,
     capture: config.capture,
     log,
   });

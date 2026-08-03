@@ -4,7 +4,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { finalizeEvent, generateSecretKey } from "nostr-tools";
 import { FakeRelay } from "../src/buzz/fake-relay.js";
-import { KIND_CHANNEL_MESSAGE, KIND_METADATA, CHANNEL_TAG } from "../src/buzz/events.js";
+import {
+  KIND_CHANNEL_MESSAGE,
+  KIND_METADATA,
+  KIND_MEMBER_LIST,
+  CHANNEL_TAG,
+} from "../src/buzz/events.js";
 import { loadIdentity } from "../src/buzz/identity.js";
 import { LocalSiloStore } from "../src/silo/local.js";
 import { SiloMemoryAgent } from "../src/agent.js";
@@ -629,5 +634,369 @@ test("the agent's own reply echoing back is not reported as a backlog", async ()
 
   assert.match(logs.join("\n"), /replied in eng/); // the reply did go out…
   assert.doesNotMatch(logs.join("\n"), /is waiting on/); // …and echoed back quietly
+  await agent.stop();
+});
+
+test("the agent discovers its channels and subscribes to each by id", async () => {
+  // The root cause of "connected, subscribed, permanently silent": Buzz
+  // excludes unscoped subscriptions from live fan-out for channel-scoped
+  // kinds. The agent has to name the channels, so it has to find them.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "chan-with-us"], ["p", identity.pubkey], ["p", "someone-else"]],
+        content: "",
+      },
+      other
+    ),
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "chan-without-us"], ["p", "someone-else"]],
+        content: "",
+      },
+      other
+    ),
+  ];
+
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  assert.deepEqual(relay.subscribedChannels(), new Set(["chan-with-us"]));
+  assert.match(logs.join("\n"), /listening to 1 channel/);
+  await agent.stop();
+});
+
+test("channels the agent is not a member of are not subscribed to", async () => {
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "private-channel"], ["p", "not-us"]],
+        content: "",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+  assert.equal(relay.subscribedChannels().size, 0);
+  await agent.stop();
+});
+
+test("discovery falls back to the channels of recent messages", async () => {
+  // A relay that doesn't publish member lists (or withholds them from
+  // agents) must not leave the agent deaf — the channels of messages it
+  // can already read are a sound second source.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "seen-in-traffic"]],
+        content: "hello",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["seen-in-traffic"]));
+  await agent.stop();
+});
+
+test("configured channels win over discovery", async () => {
+  // BUZZ_CHANNEL_IDS is an explicit operator decision; discovery must not
+  // widen it to channels they deliberately left out.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "not-configured"]],
+        content: "hello",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    channelIds: ["only-this-one"],
+  });
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["only-this-one"]));
+  await agent.stop();
+});
+
+test("with nothing discoverable the agent still subscribes, and says it is idle", async () => {
+  // Relays that fan out globally are legitimate, so an empty discovery
+  // still opens the unscoped subscription. But on Buzz that state hears
+  // nothing, and silent-but-healthy is the worst thing this agent can be.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  assert.equal(relay.subscribedChannels().size, 0);
+  assert.match(logs.join("\n"), /not in any channel yet/);
+  // …and the unscoped subscription is still live, so a global-fan-out relay works.
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!remember the fallback path still delivers",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+  assert.match(relay.published.at(-1)!.content, /Got it/);
+  await agent.stop();
+});
+
+test("the published profile carries an avatar when one is configured", async () => {
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    pictureUrl: "https://onesilo.com/apple-touch-icon.png",
+  });
+  await agent.start();
+  const profile = relay.published.find((e) => e.kind === KIND_METADATA)!;
+  const meta = JSON.parse(profile.content) as { picture?: string; name?: string };
+  assert.equal(meta.picture, "https://onesilo.com/apple-touch-icon.png");
+  assert.equal(meta.name, "OneSilo");
+  await agent.stop();
+});
+
+test("no avatar key is published when none is configured", async () => {
+  // An empty `picture` renders as a broken image; omitting the key lets
+  // the client fall back to its initial-letter placeholder.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+  const profile = relay.published.find((e) => e.kind === KIND_METADATA)!;
+  assert.ok(!("picture" in JSON.parse(profile.content)));
+  await agent.stop();
+});
+
+test("being removed from a channel stops the agent listening to it", async () => {
+  // A memory agent that keeps capturing a channel it was removed from is
+  // the one failure mode that is worse than not working at all.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  const memberList = (channelId: string, members: string[]) =>
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", channelId], ...members.map((p) => ["p", p])],
+        content: "",
+      },
+      other
+    );
+
+  relay.stored = [
+    memberList("stays", [identity.pubkey]),
+    memberList("removed-later", [identity.pubkey]),
+  ];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["stays", "removed-later"]));
+
+  // The agent is dropped from one channel; the next sweep must let it go.
+  relay.stored = [memberList("stays", [identity.pubkey])];
+  await agent.syncForTest();
+
+  assert.deepEqual(relay.subscribedChannels(), new Set(["stays"]));
+  assert.match(logs.join("\n"), /no longer in 1 channel/);
+  await agent.stop();
+});
+
+test("a discovery that comes back empty does not revoke every channel", async () => {
+  // A relay hiccup returns nothing. Treating that as "removed from
+  // everything" would take the agent offline until the next sweep, so only
+  // a positive answer about membership is allowed to revoke.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "still-ours"], ["p", identity.pubkey]],
+        content: "",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["still-ours"]));
+
+  relay.stored = []; // the relay goes quiet
+  await agent.syncForTest();
+  assert.deepEqual(
+    relay.subscribedChannels(),
+    new Set(["still-ours"]),
+    "an empty result is not evidence of removal"
+  );
+  await agent.stop();
+});
+
+test("channels seen in traffic but absent from member lists are reported, not joined", async () => {
+  // Open channels are readable by non-members, so traffic cannot tell "I
+  // was added" from "I can see it". Capturing one the agent was never
+  // added to would break its scope promise — but a member list that came
+  // back short would otherwise leave it quietly deaf, so say so.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "ours"], ["p", identity.pubkey]],
+        content: "",
+      },
+      other
+    ),
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "someone-elses"]],
+        content: "not our business",
+      },
+      other
+    ),
+  ];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  assert.deepEqual(relay.subscribedChannels(), new Set(["ours"]));
+  assert.match(logs.join("\n"), /no member list covers/);
+  assert.match(logs.join("\n"), /someone-/);
+  await agent.stop();
+});
+
+test("member lists that omit the agent revoke, rather than falling back to traffic", async () => {
+  // The removal case. Once the agent is dropped from its only channel, the
+  // member lists still come back — they just don't name it. Treating that
+  // as "no member lists, guess from traffic" would resubscribe it to the
+  // very channel it was removed from, overruling the relay with "well, I
+  // can still see messages there".
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  const now = Math.floor(Date.now() / 1000);
+  const memberList = (channelId: string, members: string[]) =>
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: now,
+        tags: [["d", channelId], ...members.map((p) => ["p", p])],
+        content: "",
+      },
+      other
+    );
+  const traffic = finalizeEvent(
+    {
+      kind: KIND_CHANNEL_MESSAGE,
+      created_at: now,
+      tags: [[CHANNEL_TAG, "eng"]],
+      content: "still chatting in here",
+    },
+    other
+  );
+
+  relay.stored = [memberList("eng", [identity.pubkey]), traffic];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["eng"]));
+
+  // Removed from #eng. The list still exists; it just no longer names us —
+  // and the channel is still visibly busy.
+  relay.stored = [memberList("eng", ["someone-else"]), traffic];
+  await agent.syncForTest();
+
+  assert.equal(
+    relay.subscribedChannels().size,
+    0,
+    "traffic must not resurrect a channel the relay says we are not in"
+  );
+  assert.match(logs.join("\n"), /no longer in 1 channel/);
+  await agent.stop();
+});
+
+test("an authoritative empty membership opens no unscoped subscription", async () => {
+  // On a relay that fans out globally, an unscoped subscription captures
+  // everything. Opening one while the relay is telling us the agent belongs
+  // to no channel would over-collect on exactly the evidence that should
+  // have stopped it.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "someone-elses"], ["p", "not-us"]],
+        content: "",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "someone-elses"]],
+        content: "!remember this should not be captured",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+  assert.equal(
+    relay.published.filter((e) => e.kind === KIND_CHANNEL_MESSAGE).length,
+    0,
+    "nothing should have been captured or answered"
+  );
   await agent.stop();
 });

@@ -27,6 +27,14 @@ export const KIND_CHANNEL_MESSAGE = 9;
  */
 export const KIND_METADATA = 0;
 
+/**
+ * NIP-29 kind 39002 — the relay-signed member list for a channel. Its `d`
+ * tag is the channel id and its `p` tags are the members, which is how the
+ * agent answers "which channels am I in?" without being able to see a
+ * membership event for a channel it hasn't joined.
+ */
+export const KIND_MEMBER_LIST = 39002;
+
 export const CHANNEL_TAG = "h";
 
 export interface ChannelMessage {
@@ -101,7 +109,7 @@ export function stripMention(content: string, handle: string): string {
  * Deliberately no `bot: true` (NIP-24): in Buzz an agent is a member, not
  * a bot, and clients that dim or filter bots would hide it.
  */
-export function buildProfile(handle: string): EventTemplate {
+export function buildProfile(handle: string, pictureUrl?: string): EventTemplate {
   return {
     kind: KIND_METADATA,
     created_at: Math.floor(Date.now() / 1000),
@@ -109,6 +117,11 @@ export function buildProfile(handle: string): EventTemplate {
     content: JSON.stringify({
       name: handle,
       display_name: handle,
+      // NIP-01 calls this `picture`; Buzz syncs it into its users table as
+      // `avatar`. Omitted entirely rather than sent empty when unset — a
+      // blank string is a broken image, which looks worse than the
+      // initial-letter placeholder a client falls back to.
+      ...(pictureUrl ? { picture: pictureUrl } : {}),
       about:
         "Long-term memory for this workspace, powered by One Silo. " +
         `Ask "@${handle} what do you remember?", or !remember something.`,

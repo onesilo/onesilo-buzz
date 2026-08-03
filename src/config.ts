@@ -26,6 +26,8 @@ export function loadDotEnv(path = ".env"): void {
 export interface Config {
   relayUrl: string;
   agentHandle: string;
+  /** Avatar URL published in the kind 0 profile (NIP-01 `picture`). */
+  agentPictureUrl: string;
   agentSecretKeyHex?: string;
   channelIds: string[];
   /** Conversation-capture tuning (turn window size, overlap, idle flush). */
@@ -101,6 +103,10 @@ export function loadConfig(env = process.env): Config {
   return {
     relayUrl: env.BUZZ_RELAY_URL ?? DEFAULT_RELAY_URL,
     agentHandle: env.AGENT_HANDLE ?? "OneSilo",
+    // Defaults to the One Silo mark already served from the marketing site.
+    // Set AGENT_PICTURE_URL to rebrand, or to "" to publish no avatar.
+    agentPictureUrl:
+      env.AGENT_PICTURE_URL ?? "https://onesilo.com/apple-touch-icon.png",
     agentSecretKeyHex: env.AGENT_SECRET_KEY,
     channelIds: (env.BUZZ_CHANNEL_IDS ?? "")
       .split(",")
