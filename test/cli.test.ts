@@ -301,7 +301,53 @@ test("node setup runs the node's non-interactive contract (-yes)", async () => {
   const runner = fakeRunner({ present: ["onesilo-node"] });
   const outcome = await runNodeSetup(() => {}, runner);
   assert.equal(outcome.ok, true);
-  assert.deepEqual(runner.calls, ["onesilo-node setup -yes"]);
+  // -serve=agents: a node installed on the operator's behalf serves this
+  // machine's agent, and must not start advertising itself on their network
+  // while nobody is watching.
+  assert.deepEqual(runner.calls, ["onesilo-node setup -yes -serve=agents"]);
+});
+
+test("node setup falls back when the installed node predates -serve", async () => {
+  // Someone with an older node already on PATH reaches runNodeSetup without
+  // an install. Go's flag package exits 2 before doing any work, so the
+  // retry is not a partial setup — and that node's -yes defaults are
+  // loopback-only anyway, so the fallback is the same outcome.
+  const { runNodeSetup } = await import("../src/cli/node-setup.js");
+  const calls: string[] = [];
+  const runner: Runner = {
+    async which() {
+      return true;
+    },
+    async run(command, args) {
+      calls.push([command, ...args].join(" "));
+      return args.includes("-serve=agents") ? 2 : 0;
+    },
+  };
+
+  const outcome = await runNodeSetup(() => {}, runner);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(calls, [
+    "onesilo-node setup -yes -serve=agents",
+    "onesilo-node setup -yes",
+  ]);
+});
+
+test("node setup reports the command it actually ran when setup fails", async () => {
+  // The failure message is an instruction to the operator; naming a command
+  // that was never run sends them debugging the wrong thing.
+  const { runNodeSetup } = await import("../src/cli/node-setup.js");
+  const runner: Runner = {
+    async which() {
+      return true;
+    },
+    async run(_command, args) {
+      return args.includes("-serve=agents") ? 2 : 1;
+    },
+  };
+
+  const outcome = await runNodeSetup(() => {}, runner);
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.detail ?? "", /`onesilo-node setup -yes` exited 1/);
 });
 
 test("unpaired mcp mode fails fast, before any node work", async () => {

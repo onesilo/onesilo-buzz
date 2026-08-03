@@ -143,25 +143,45 @@ const FORMULA = "onesilo/tap/onesilo-node";
  * here. Shelling out rather than reimplementing is the point: there is
  * exactly one description of how a node is configured, and it lives in the
  * node.
+ *
+ * `-serve=agents` is the other half of the contract. The node this flow
+ * provisions exists to serve one agent on this machine; it should not
+ * advertise itself over Bonjour or accept connections from the local
+ * network, and nobody is at the keyboard to notice if it does. Recent nodes
+ * already default to that under `-yes`, but stating it means a change to
+ * that default cannot silently widen a node installed on someone's behalf.
  */
+const SETUP_ARGS = ["setup", "-yes", "-serve=agents"];
+
 export async function runNodeSetup(
   log: (line: string) => void,
   runner: Runner = systemRunner
 ): Promise<InstallOutcome> {
   log(
-    "Initializing the node with default settings (first run downloads Ollama and a local model — this can take a while)…"
+    "Initializing the node for local agents only (first run downloads Ollama and a local model — this can take a while)…"
   );
-  const code = await runner.run("onesilo-node", ["setup", "-yes"]);
+  let args = SETUP_ARGS;
+  let code = await runner.run("onesilo-node", args);
+  if (code === FLAG_PARSE_EXIT) {
+    // A node predating `-serve` rejects the flag before doing any work. Its
+    // `-yes` defaults are loopback-only anyway, so retrying without it is
+    // the same outcome, not a weaker one.
+    args = ["setup", "-yes"];
+    code = await runner.run("onesilo-node", args);
+  }
   if (code !== 0) {
     return {
       ok: false,
       detail:
-        `\`onesilo-node setup -yes\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
+        `\`onesilo-node ${args.join(" ")}\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
         "  onesilo-node setup",
     };
   }
   return { ok: true };
 }
+
+/** Go's `flag` package exits 2 on an unrecognized flag. */
+const FLAG_PARSE_EXIT = 2;
 
 /** A node process this CLI started and is responsible for stopping. */
 export interface SupervisedNode {
