@@ -21,6 +21,9 @@ import {
   stripMention,
   buildProfile,
   buildReply,
+  KIND_CHANNEL_MESSAGE,
+  KIND_MEMBER_LIST,
+  CHANNEL_TAG,
   type ChannelMessage,
 } from "./buzz/events.js";
 import type { AgentIdentity } from "./buzz/identity.js";
@@ -45,6 +48,8 @@ export interface AgentOptions {
   channelIds?: string[];
   /** pubkey -> display name, for provenance lines in replies. */
   names?: Map<string, string>;
+  /** Avatar URL for the kind 0 profile; omitted when empty. */
+  pictureUrl?: string;
   /** Conversation-capture tuning: window size, overlap, idle flush. */
   capture?: Partial<WindowOptions>;
   /** Pause between shutdown flush retries (test seam). */
@@ -55,6 +60,18 @@ export interface AgentOptions {
 /** Shutdown flush retry budget: attempts and pacing. */
 const SHUTDOWN_FLUSH_ATTEMPTS = 3;
 const SHUTDOWN_FLUSH_RETRY_MS = 2_000;
+
+/**
+ * How often to look for channels the agent has been added to. Being added
+ * is not something the agent can observe — the membership event belongs to
+ * a channel it isn't in yet — so the only way to notice is to ask again.
+ * Message delivery is live once subscribed; this only paces "welcome to a
+ * new channel", where 30s is imperceptible.
+ */
+const CHANNEL_SYNC_MS = 30_000;
+
+/** Recent messages scanned when member lists aren't available. */
+const DISCOVERY_MESSAGE_LIMIT = 200;
 
 const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/i;
 
@@ -89,6 +106,9 @@ export class SiloMemoryAgent {
   /** Rolling per-channel turn buffers; segments flush to the store. */
   private readonly window: TurnWindowManager;
   private idleTimer?: NodeJS.Timeout;
+  private channelSyncTimer?: NodeJS.Timeout;
+  /** Whether any subscription has been opened (guards the fallback). */
+  private subscriptionOpened = false;
 
   constructor(
     private readonly relay: BuzzRelay,
@@ -103,6 +123,115 @@ export class SiloMemoryAgent {
     );
   }
 
+  /**
+   * Channels the agent can see, newest membership first.
+   *
+   * Buzz keeps channel-scoped events out of live fan-out for unscoped
+   * subscriptions, so the agent has to name each channel in its REQ — and
+   * therefore has to find out which channels it is in. Buzz's own guidance
+   * is that "clients discover groups via historical REQ queries", so this
+   * is a read, not a subscription.
+   *
+   * Primary source is the relay-signed member list (kind 39002): its `d`
+   * tag is the channel id and its `p` tags are the members, which answers
+   * "am I in it?" definitively. Where that returns nothing — a relay that
+   * doesn't publish member lists, or one that withholds them from agents —
+   * fall back to the channels of recent messages, which is what the agent
+   * could observe anyway.
+   */
+  private async discoverChannels(): Promise<string[]> {
+    const found = new Set<string>();
+    const query = this.relay.queryOnce?.bind(this.relay);
+    if (!query) return [];
+    try {
+      const lists = await query({ kinds: [KIND_MEMBER_LIST] });
+      for (const list of lists) {
+        const channelId = list.tags.find((t) => t[0] === "d")?.[1];
+        if (!channelId) continue;
+        const members = list.tags.filter((t) => t[0] === "p").map((t) => t[1]);
+        if (members.includes(this.identity.pubkey)) found.add(channelId);
+      }
+    } catch (err) {
+      this.log(`channel discovery via member lists failed: ${err}`);
+    }
+    if (found.size > 0) return [...found];
+
+    try {
+      const recent = await query({
+        kinds: [KIND_CHANNEL_MESSAGE],
+        limit: DISCOVERY_MESSAGE_LIMIT,
+      });
+      for (const event of recent) {
+        const channelId = event.tags.find((t) => t[0] === CHANNEL_TAG)?.[1];
+        if (channelId) found.add(channelId);
+      }
+    } catch (err) {
+      this.log(`channel discovery via recent messages failed: ${err}`);
+    }
+    return [...found];
+  }
+
+  /**
+   * Subscribe to any channel we aren't already tailing. Run on start and on
+   * a timer: being added to a new channel is an event the agent cannot see
+   * (it isn't in a channel it hasn't joined), so the only way to notice is
+   * to look again.
+   */
+  private async syncChannelSubscriptions(): Promise<void> {
+    const configured = this.options.channelIds ?? [];
+    const channels = configured.length > 0 ? configured : await this.discoverChannels();
+    const already = this.relay.subscribedChannels?.() ?? new Set<string>();
+    const fresh = channels.filter((id) => !already.has(id));
+
+    if (fresh.length === 0) {
+      // Nothing new. On the very first sweep with nothing found, still open
+      // the unscoped subscription: it is the correct "everything visible"
+      // behavior on relays that fan out globally (self-hosted, the
+      // in-process demo relay), and on Buzz-style relays it still supplies
+      // history across reconnects. Hard-coding one relay's fan-out rule as
+      // "never subscribe globally" would break every other one.
+      if (!this.subscriptionOpened) {
+        this.subscriptionOpened = true;
+        this.relay.subscribeChannels([], (event) => this.enqueue(event));
+      }
+      return;
+    }
+
+    this.subscriptionOpened = true;
+    this.relay.subscribeChannels(fresh, (event) => this.enqueue(event));
+    this.log(
+      `listening to ${fresh.length} channel(s): ${fresh.map((c) => `#${c.slice(0, 8)}`).join(", ")}`
+    );
+  }
+
+  /** Queue an event for strictly-ordered handling. */
+  private enqueue(event: NostrEvent): void {
+    // Our own replies come back on our own subscription — the relay
+    // serves every event matching the filter, ours included. handleEvent
+    // drops them anyway, but dropping them here keeps them out of the
+    // backlog count: a reply published mid-turn echoes back while that
+    // turn is still running, which would otherwise report a message
+    // waiting behind it that does not exist.
+    if (event.pubkey === this.identity.pubkey) return;
+    this.queued += 1;
+    if (this.queued > 1) {
+      // Serial handling means the wait is real, not a relay delay — say so
+      // rather than letting the agent look asleep.
+      this.log(
+        `${event.id.slice(0, 8)} is waiting on ${this.queued - 1} earlier message(s)`
+      );
+    }
+    this.queue = this.queue
+      .then(() =>
+        this.handleEvent(event).catch((err) =>
+          this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
+        )
+      )
+      .finally(() => {
+        this.queued -= 1;
+      });
+  }
+
   async start(): Promise<void> {
     await this.relay.connect();
     // Announce who we are before subscribing: without a kind 0 the client
@@ -110,40 +239,32 @@ export class SiloMemoryAgent {
     // appears. Non-fatal — a workspace that rejects profile writes should
     // still get a working agent, just an unnamed one.
     try {
-      await this.relay.publish(buildProfile(this.identity.handle));
+      await this.relay.publish(
+        buildProfile(this.identity.handle, this.options.pictureUrl)
+      );
       this.log(`published profile as @${this.identity.handle}`);
     } catch (err) {
       this.log(`could not publish the agent profile (continuing unnamed): ${err}`);
     }
-    this.relay.subscribeChannels(this.options.channelIds ?? [], (event) => {
-      // Our own replies come back on our own subscription — the relay
-      // serves every event matching the filter, ours included. handleEvent
-      // drops them anyway, but dropping them here keeps them out of the
-      // backlog count: a reply published mid-turn echoes back while that
-      // turn is still running, which would otherwise report a message
-      // waiting behind it that does not exist.
-      if (event.pubkey === this.identity.pubkey) return;
-      // Events are processed strictly in arrival order: a !recall must see
-      // the memories of every message delivered before it, and a redelivered
-      // event must not be captured twice.
-      this.queued += 1;
-      if (this.queued > 1) {
-        // Serial handling means the wait is real, not a relay delay — say so
-        // rather than letting the agent look asleep.
-        this.log(
-          `${event.id.slice(0, 8)} is waiting on ${this.queued - 1} earlier message(s)`
-        );
-      }
-      this.queue = this.queue
-        .then(() =>
-          this.handleEvent(event).catch((err) =>
-            this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
-          )
-        )
-        .finally(() => {
-          this.queued -= 1;
-        });
-    });
+    // Events are processed strictly in arrival order: a !recall must see
+    // the memories of every message delivered before it, and a redelivered
+    // event must not be captured twice. See enqueue().
+    await this.syncChannelSubscriptions();
+    if ((this.relay.subscribedChannels?.().size ?? 0) === 0 && this.relay.queryOnce) {
+      // Worth saying plainly: on Buzz this state receives nothing live, and
+      // "connected, subscribed, silent" is the single most confusing thing
+      // this agent can do.
+      this.log(
+        `not in any channel yet — add @${this.identity.handle} to one and it will ` +
+          `start listening within ${Math.round(CHANNEL_SYNC_MS / 1000)}s`
+      );
+    }
+    this.channelSyncTimer = setInterval(() => {
+      void this.syncChannelSubscriptions().catch((err) =>
+        this.log(`channel sync failed: ${err}`)
+      );
+    }, CHANNEL_SYNC_MS);
+    this.channelSyncTimer.unref?.();
     // Idle episodes flush on a timer; chained onto the queue so flushes
     // never interleave with in-flight event handling.
     this.idleTimer = setInterval(() => {
@@ -156,6 +277,7 @@ export class SiloMemoryAgent {
   /** Flush pending conversation buffers and stop timers (shutdown path). */
   async stop(): Promise<void> {
     if (this.idleTimer) clearInterval(this.idleTimer);
+    if (this.channelSyncTimer) clearInterval(this.channelSyncTimer);
     // Drain queued event handling before the final flush: turns still in
     // the queue at shutdown must land in the buffers first, and a flush
     // must never interleave with an in-flight handler.

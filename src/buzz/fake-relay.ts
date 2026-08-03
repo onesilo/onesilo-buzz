@@ -13,13 +13,30 @@ import type { BuzzRelay, EventHandler } from "./relay.js";
 export class FakeRelay implements BuzzRelay {
   private handlers: EventHandler[] = [];
   public published: NostrEvent[] = [];
+  /** Channels subscribed to; mirrors the real relay's bookkeeping. */
+  public readonly subscribed = new Set<string>();
+  /** Events queryOnce() will return, by kind. Tests set this up. */
+  public stored: NostrEvent[] = [];
 
   constructor(private readonly agentSecretKey: Uint8Array) {}
 
   async connect(): Promise<void> {}
 
-  subscribeChannels(_channelIds: string[], onEvent: EventHandler): void {
+  subscribeChannels(channelIds: string[], onEvent: EventHandler): void {
+    for (const id of channelIds) this.subscribed.add(id);
     this.handlers.push(onEvent);
+  }
+
+  subscribedChannels(): Set<string> {
+    return new Set(this.subscribed);
+  }
+
+  /** Historical read over `stored`, matching only what the agent uses. */
+  async queryOnce(filter: Record<string, unknown>): Promise<NostrEvent[]> {
+    const kinds = filter.kinds as number[] | undefined;
+    const limit = filter.limit as number | undefined;
+    const matched = this.stored.filter((e) => !kinds || kinds.includes(e.kind));
+    return limit ? matched.slice(0, limit) : matched;
   }
 
   async publish(template: EventTemplate): Promise<NostrEvent> {

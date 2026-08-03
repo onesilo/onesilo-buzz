@@ -30,8 +30,27 @@ const RESUBSCRIBE_SLACK_SECONDS = 60;
 
 export interface BuzzRelay {
   connect(): Promise<void>;
-  /** Subscribe to channel messages in the given channels ([] = all visible). */
+  /**
+   * Subscribe to channel messages. One subscription is opened per channel
+   * id — see subscribeChannels() on the implementation for why that is
+   * load-bearing rather than a style choice. An empty list opens a single
+   * unscoped subscription, which reads history but receives no live
+   * traffic; callers should discover channels first.
+   */
   subscribeChannels(channelIds: string[], onEvent: EventHandler): void;
+  /**
+   * One-shot historical query: REQ, collect until EOSE, CLOSE. Buzz stores
+   * channel-scoped events but excludes unscoped subscriptions from live
+   * fan-out, so discovery ("which channels am I in?") has to be a
+   * historical read even though message delivery is live.
+   */
+  queryOnce?(filter: Record<string, unknown>, timeoutMs?: number): Promise<NostrEvent[]>;
+  /**
+   * Channel ids currently subscribed to. Optional: a relay that cannot
+   * report this simply gets re-subscribed to the same channels, which the
+   * agent's event-id dedup already absorbs.
+   */
+  subscribedChannels?(): Set<string>;
   /** Sign with the agent identity and publish. */
   publish(template: EventTemplate): Promise<NostrEvent>;
   close(): void;
@@ -41,6 +60,8 @@ export class WebSocketRelay implements BuzzRelay {
   private ws?: WebSocket;
   private subSeq = 0;
   private handlers = new Map<string, EventHandler>();
+  /** EOSE callbacks for one-shot queries; live tails have none. */
+  private eoseHandlers = new Map<string, () => void>();
   /**
    * Channel ids by subscription id, replayed after reconnect / NIP-42 auth.
    * Stored as ids rather than built filters so `since` is recomputed at
@@ -257,7 +278,14 @@ export class WebSocketRelay implements BuzzRelay {
     if (type === "EVENT") {
       const [subId, event] = rest as [string, NostrEvent];
       if (!verifyEvent(event)) return; // never trust unsigned/forged input
-      if (event.created_at > this.latestSeenAt) this.latestSeenAt = event.created_at;
+      // created_at is attacker- and clock-controlled: it is whatever the
+      // publishing client stamped. Letting it push the resubscribe floor
+      // into the future would make every later REQ ask for events "since
+      // next Tuesday" — one skewed message and the agent goes deaf until
+      // real time catches up. Never advance the floor past now.
+      const now = Math.floor(Date.now() / 1000);
+      const seenAt = Math.min(event.created_at, now);
+      if (seenAt > this.latestSeenAt) this.latestSeenAt = seenAt;
       this.handlers.get(subId)?.(event);
     } else if (type === "OK") {
       // NIP-01 write acknowledgement. publish() resolves on socket write
@@ -310,6 +338,11 @@ export class WebSocketRelay implements BuzzRelay {
       // it's the only positive confirmation the agent is actually
       // listening, and its absence is what "nothing happens" looks like.
       const [subId] = rest as [string];
+      const onEose = this.eoseHandlers.get(subId);
+      if (onEose) {
+        onEose(); // a one-shot query, not a live tail — don't announce it
+        return;
+      }
       this.log(`subscription ${subId} is live`);
     } else if (type === "AUTH") {
       // NIP-42: relay challenges us; sign kind 22242 with our agent key.
@@ -365,14 +398,71 @@ export class WebSocketRelay implements BuzzRelay {
     }
   }
 
+  /**
+   * One subscription per channel, each carrying its own `#h`.
+   *
+   * This is the difference between an agent that works and one that
+   * silently never hears anything. Buzz keeps channel-scoped and global
+   * subscriptions strictly separate for live fan-out: a kinds-only
+   * subscription is served from storage and then excluded from the live
+   * path forever. The symptom is maximally misleading — the REQ is
+   * accepted, history arrives, EOSE says "live", and nothing follows.
+   *
+   * An empty list still opens the unscoped subscription, which is honest
+   * about what it can do: history on (re)connect, no live traffic. Callers
+   * that want messages must discover channels first.
+   */
   subscribeChannels(channelIds: string[], onEvent: EventHandler): void {
     if (!this.ws) throw new Error("relay not connected");
-    const subId = `silo-mem-${++this.subSeq}`;
-    this.handlers.set(subId, onEvent);
-    // Live tail only (backfill is a deliberate non-goal). The floor is
-    // computed per (re)subscribe by filterFor().
-    this.subscriptions.set(subId, channelIds);
-    this.ws.send(JSON.stringify(["REQ", subId, this.filterFor(channelIds)]));
+    const scopes = channelIds.length > 0 ? channelIds.map((id) => [id]) : [[]];
+    for (const scope of scopes) {
+      const subId = `silo-mem-${++this.subSeq}`;
+      this.handlers.set(subId, onEvent);
+      // Live tail only (backfill is a deliberate non-goal). The floor is
+      // computed per (re)subscribe by filterFor().
+      this.subscriptions.set(subId, scope);
+      this.ws.send(JSON.stringify(["REQ", subId, this.filterFor(scope)]));
+    }
+  }
+
+  /** Channel ids currently subscribed to (used to spot new ones). */
+  subscribedChannels(): Set<string> {
+    const ids = new Set<string>();
+    for (const scope of this.subscriptions.values()) {
+      for (const id of scope) ids.add(id);
+    }
+    return ids;
+  }
+
+  async queryOnce(
+    filter: Record<string, unknown>,
+    timeoutMs = 10_000
+  ): Promise<NostrEvent[]> {
+    const ws = this.ws;
+    if (!ws) throw new Error("relay not connected");
+    const subId = `silo-q-${++this.subSeq}`;
+    const events: NostrEvent[] = [];
+    return new Promise((resolve) => {
+      // Resolve on EOSE, or on the timeout with whatever arrived. A
+      // discovery query that hangs must not wedge startup — an empty
+      // result degrades to "no channels found", which is recoverable on
+      // the next sweep, whereas a never-settling promise is not.
+      const finish = () => {
+        clearTimeout(timer);
+        this.handlers.delete(subId);
+        this.eoseHandlers.delete(subId);
+        try {
+          ws.send(JSON.stringify(["CLOSE", subId]));
+        } catch {
+          // Socket already gone; the relay drops the subscription anyway.
+        }
+        resolve(events);
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      this.handlers.set(subId, (event) => events.push(event));
+      this.eoseHandlers.set(subId, finish);
+      ws.send(JSON.stringify(["REQ", subId, filter]));
+    });
   }
 
   /**

@@ -327,8 +327,9 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BUZZ_RELAY_URL` | *(asked on first run)* | Your Buzz workspace relay; `ws://localhost:7777` for local dev |
-| `BUZZ_CHANNEL_IDS` | *(all visible)* | Comma-separated channels to listen in |
+| `BUZZ_CHANNEL_IDS` | *(auto-discovered)* | Comma-separated channels to listen in; set it to pin the agent to a subset |
 | `AGENT_HANDLE` | `OneSilo` | The agent's @handle |
+| `AGENT_PICTURE_URL` | One Silo mark | Avatar published in the agent's profile; set empty for none |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
 | `SILO_MODE` | `mcp` | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://connect.onesilo.com` | Silo control plane (OAuth + MCP) |
@@ -618,6 +619,7 @@ directory itself, and systemd-provided variables win over the file.
 | `onesilo-buzz connect` fails to open callback | port 8765 taken (usually the node's LAN API) | `SILO_OAUTH_CALLBACK_PORT=8770 onesilo-buzz connect` |
 | Memory stopped updating (node shapes) | node down — captures buffer, never fall back to cloud | start the node; buffered captures flush on recovery |
 | Replies take tens of seconds | local model is slow — check `local model (...) replied in Ns` in the log | pull a smaller model on the node, or accept the latency |
+| `not in any channel yet` in the log | the agent isn't a member of any channel, so there is nothing to subscribe to | add it to a channel; it picks that up within 30s |
 | Startup refuses `NODE_URL` | non-loopback node URL without the explicit opt-in | keep the node local, or `NODE_ALLOW_REMOTE=1` + `https://` |
 | New/unknown identity after a move | ran from a different directory → fresh `.silo/agent.key` | run from the original directory or set `AGENT_SECRET_KEY` |
 | `brew install` refuses the formula | tap not trusted | `brew trust --formula onesilo/tap/onesilo-buzz` (and `…/onesilo-node`) |

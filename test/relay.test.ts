@@ -82,10 +82,68 @@ test("a socket that stops answering pings is torn down and reconnected", async (
   }
 });
 
-test("resubscribe floors `since` at the newest seen event, not process start", async () => {
-  // A reconnect that replayed from process start re-delivers everything —
-  // on a long-lived agent that outgrows the dedup window, that means
-  // re-answered commands. The REQ after a reconnect must move forward.
+test("a future-dated event cannot push the resubscribe floor past now", async () => {
+  // `created_at` is whatever the publishing client stamped — a skewed clock
+  // or a hostile peer can put it in the future. If that advanced the floor,
+  // every later REQ would ask for events "since next Tuesday" and the agent
+  // would go deaf until real time caught up. Now that the REQ floor is what
+  // makes reconnect delivery work, that is a total outage, not a hiccup.
+  const srv = await server();
+  const reqs: Array<{ since: number }> = [];
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as [string, string, { since: number }];
+      if (msg[0] === "REQ") reqs.push(msg[2]);
+    });
+  });
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    relay.subscribeChannels([], () => {});
+    await waitFor(() => reqs.length >= 1);
+
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    srv.sockets[0]!.send(
+      JSON.stringify([
+        "EVENT",
+        "silo-mem-1",
+        finalizeEvent(
+          {
+            kind: KIND_CHANNEL_MESSAGE,
+            created_at: future,
+            tags: [[CHANNEL_TAG, "eng"]],
+            content: "posted by a clock an hour fast",
+          },
+          generateSecretKey()
+        ),
+      ])
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    srv.sockets[0]!.terminate();
+    await waitFor(() => reqs.length >= 2, 5000);
+
+    const resubSince = reqs[reqs.length - 1]!.since;
+    const now = Math.floor(Date.now() / 1000);
+    assert.ok(
+      resubSince <= now,
+      `since (${resubSince}) must never exceed now (${now}) — it was pushed into the future`
+    );
+    assert.ok(resubSince < future, "the future timestamp must not become the floor");
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
+
+test("resubscribe recomputes `since` from what was seen, bounded by now", async () => {
+  // The floor tracks the newest event actually seen (minus slack) rather
+  // than being reused from construction, so a long-lived agent doesn't
+  // replay its whole history on every reconnect. It is bounded above by
+  // now — see the future-dated test — so within the 60s slack window a
+  // fresh process legitimately resubscribes from its original floor. What
+  // must hold either way: never backwards, never into the future.
   const srv = await server();
   const reqs: Array<{ since: number }> = [];
   srv.wss.on("connection", (ws) => {
@@ -102,12 +160,11 @@ test("resubscribe floors `since` at the newest seen event, not process start", a
     await waitFor(() => reqs.length >= 1);
     const firstSince = reqs[0]!.since;
 
-    // Deliver an event well in the future of the construction floor.
-    const future = Math.floor(Date.now() / 1000) + 3600;
+    const seenAt = Math.floor(Date.now() / 1000);
     const event = finalizeEvent(
       {
         kind: KIND_CHANNEL_MESSAGE,
-        created_at: future,
+        created_at: seenAt,
         tags: [[CHANNEL_TAG, "eng"]],
         content: "we decided to ship on Tuesday",
       },
@@ -122,11 +179,14 @@ test("resubscribe floors `since` at the newest seen event, not process start", a
     await waitFor(() => reqs.length >= 2, 5000);
     const resubSince = reqs[reqs.length - 1]!.since;
     assert.ok(
-      resubSince > firstSince,
-      `resubscribe since (${resubSince}) should advance past the initial floor (${firstSince})`
+      resubSince >= firstSince,
+      `since (${resubSince}) must never go backwards from the initial floor (${firstSince})`
     );
-    // …but with slack, so an in-flight event straddling the reconnect isn't skipped.
-    assert.ok(resubSince <= future, "since must not overshoot the newest seen event");
+    // Slack keeps an event straddling the reconnect from being skipped.
+    assert.ok(
+      resubSince <= seenAt,
+      "since must not overshoot the newest seen event and skip it"
+    );
   } finally {
     relay.close();
     await srv.close();
@@ -264,6 +324,130 @@ test("acknowledged events are not replayed on a later auth challenge", async () 
 
     const timesSent = eventsSeen.filter((id) => id === published.id).length;
     assert.equal(timesSent, 1, "an accepted event must not be replayed after auth");
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
+
+test("each channel gets its own #h-scoped subscription", async () => {
+  // The bug this exists to prevent: Buzz keeps channel-scoped and global
+  // subscriptions strictly separate for LIVE fan-out. A kinds-only REQ is
+  // answered from storage, gets an EOSE, and is then excluded from the
+  // live path forever — so the agent looks perfectly healthy (subscribed,
+  // "is live") and never hears another word. Naming the channel in `#h`
+  // is the whole difference between working and silently deaf.
+  const srv = await server();
+  const reqs: Array<[string, Record<string, unknown>]> = [];
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as [string, string, Record<string, unknown>];
+      if (msg[0] === "REQ") reqs.push([msg[1], msg[2]]);
+    });
+  });
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    relay.subscribeChannels(["chan-a", "chan-b"], () => {});
+    await waitFor(() => reqs.length >= 2);
+
+    assert.equal(reqs.length, 2, "one subscription per channel, not one for both");
+    const scopes = reqs.map(([, f]) => f["#h"]);
+    assert.deepEqual(scopes, [["chan-a"], ["chan-b"]]);
+    assert.notEqual(reqs[0]![0], reqs[1]![0], "each needs its own subscription id");
+    assert.deepEqual(relay.subscribedChannels(), new Set(["chan-a", "chan-b"]));
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
+
+test("an unscoped subscription is still available, and says nothing about #h", async () => {
+  // Relays that fan out globally (self-hosted, the in-process demo relay)
+  // are a legitimate deployment. Hard-coding one relay's fan-out rule as
+  // "never subscribe globally" would break them.
+  const srv = await server();
+  const filters: Array<Record<string, unknown>> = [];
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as [string, string, Record<string, unknown>];
+      if (msg[0] === "REQ") filters.push(msg[2]);
+    });
+  });
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    relay.subscribeChannels([], () => {});
+    await waitFor(() => filters.length >= 1);
+    assert.equal(filters.length, 1);
+    assert.ok(!("#h" in filters[0]!), "an unscoped filter must not carry an empty #h");
+    assert.deepEqual(filters[0]!.kinds, [KIND_CHANNEL_MESSAGE]);
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
+
+test("queryOnce collects until EOSE and then closes the subscription", async () => {
+  // Channel discovery is a historical read, because Buzz's own guidance is
+  // that clients discover groups that way. It must settle on EOSE and not
+  // leave a subscription behind on every sweep.
+  const srv = await server();
+  const closes: string[] = [];
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as [string, string, Record<string, unknown>];
+      if (msg[0] === "CLOSE") closes.push(msg[1]);
+      if (msg[0] !== "REQ") return;
+      const subId = msg[1];
+      for (const content of ["one", "two"]) {
+        ws.send(
+          JSON.stringify([
+            "EVENT",
+            subId,
+            finalizeEvent(
+              {
+                kind: KIND_CHANNEL_MESSAGE,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [[CHANNEL_TAG, "eng"]],
+                content,
+              },
+              generateSecretKey()
+            ),
+          ])
+        );
+      }
+      ws.send(JSON.stringify(["EOSE", subId]));
+    });
+  });
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    const events = await relay.queryOnce({ kinds: [KIND_CHANNEL_MESSAGE] });
+    assert.equal(events.length, 2);
+    assert.deepEqual(events.map((e) => e.content), ["one", "two"]);
+    await waitFor(() => closes.length >= 1);
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});
+
+test("queryOnce settles on timeout rather than hanging startup", async () => {
+  // A relay that accepts the REQ and never sends EOSE must not wedge the
+  // agent's startup — an empty discovery result is recoverable on the next
+  // sweep, a never-settling promise is not.
+  const srv = await server();
+  srv.wss.on("connection", (ws) => ws.on("message", () => {})); // deliberate silence
+
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), () => {}, 10_000);
+  await relay.connect();
+  try {
+    const events = await relay.queryOnce({ kinds: [KIND_CHANNEL_MESSAGE] }, 200);
+    assert.deepEqual(events, []);
   } finally {
     relay.close();
     await srv.close();
