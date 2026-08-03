@@ -779,3 +779,30 @@ test("SILO_MODE=node settles the tier without asking", async () => {
   }
   assert.match(text(), /SILO_MODE=node is set/);
 });
+
+test("relay + cloud still sets up the node it reaches memory through", async () => {
+  // relay reads and writes One Silo *through* the gateway node's LAN API.
+  // Picking `cloud` there is a statement about distillation, not about
+  // whether a node exists — skipping setup starts the agent against a store
+  // pointed at nothing, which looks healthy and fails on every call.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "relay";
+  process.env.MEMORY_MODE = "cloud";
+  delete process.env.DISTILL_MODE;
+
+  const mode = await resolveMemoryMode(loadConfig(process.env), parseFlags(["--yes"]), runner);
+  assert.equal(mode, null, "no node installable, so this must abort");
+});
+
+test("mcp + cloud needs no node at all", async () => {
+  // The control case: without node-backed storage, choosing cloud really is
+  // the zero-infrastructure path.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "mcp";
+  process.env.MEMORY_MODE = "cloud";
+  delete process.env.DISTILL_MODE;
+
+  const mode = await resolveMemoryMode(loadConfig(process.env), parseFlags([]), runner);
+  assert.equal(mode, "cloud");
+  assert.deepEqual(runner.calls, []);
+});

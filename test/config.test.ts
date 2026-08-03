@@ -216,3 +216,21 @@ test("a bare SILO_MODE keeps the legacy cloud default", () => {
   const cfg = loadConfig({ SILO_MODE: "mcp" } as NodeJS.ProcessEnv);
   assert.equal(cfg.distill, "cloud");
 });
+
+test("the on-disk store is described as a file, not as a node", async () => {
+  // Two very different setups share the `local` tier. Announcing "stored on
+  // your node" for the JSON demo store sends people looking for a node that
+  // was never part of it.
+  const { startAgent } = await import("../src/boot.js");
+  const lines: string[] = [];
+  const cfg = loadConfig({ SILO_MODE: "local" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.memoryMode, "local");
+
+  // startAgent logs the mode before doing anything that needs a relay, so
+  // the connection failure afterwards is expected and irrelevant here.
+  await startAgent({ config: cfg, log: (l) => lines.push(l) }).catch(() => {});
+  const summary = lines.find((l) => l.startsWith("memory mode:"));
+  assert.ok(summary, "the mode must be stated at boot");
+  assert.match(summary, /JSON file/);
+  assert.doesNotMatch(summary, /on your node/);
+});

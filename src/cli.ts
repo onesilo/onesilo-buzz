@@ -235,20 +235,26 @@ async function resolveMemoryMode(
         forced: flags.assumeYes ? "hybrid" : undefined,
       });
 
-  // Nothing to install when the settled configuration doesn't want a node.
-  // `chosen` means the environment decided, so trust what it actually wired
-  // up rather than the tier label — SILO_MODE=local reads as the `local`
-  // tier but is a JSON file on disk.
-  if (chosen ? !configNeedsNode : mode === "cloud") {
+  // Whether a node is needed once the tier is settled.
+  //
+  // Storage can demand one no matter which tier was picked: relay reaches
+  // One Silo *through* the gateway node, so choosing `cloud` there still
+  // needs the node running. Distillation demands one for anything but
+  // cloud. Reading only the tier let a relay + cloud answer skip setup
+  // entirely and start against a store pointed at nothing.
+  const storageNeedsNode =
+    config.silo.mode === "node" || config.silo.mode === "relay";
+  const needsNode =
+    storageNeedsNode || (chosen ? config.distill === "node" : mode !== "cloud");
+
+  if (!needsNode) {
     settle(mode, false);
     return asked ? remember(mode) : mode;
   }
 
-  // local and hybrid both need a node: one to store memory, one to distill.
-  const needs =
-    mode === "local"
-      ? "memory lives on it"
-      : "it distills conversation before anything is sent";
+  const needs = storageNeedsNode
+    ? "memory is reached through it"
+    : "it distills conversation before anything is sent";
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
     log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);

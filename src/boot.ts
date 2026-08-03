@@ -171,6 +171,24 @@ const TIER_SUMMARY: Record<MemoryMode, string> = {
     "transcripts are sent to your silo, distilled there with full context and enriched",
 };
 
+/**
+ * The summary for the configuration actually running.
+ *
+ * Two very different setups share the `local` tier — both keep everything
+ * on this machine — so the tier alone can misdescribe one of them. The
+ * on-disk demo store involves no node at all, and a first boot line that
+ * says otherwise sends people looking for a node that was never part of it.
+ */
+function tierSummary(config: Config): string {
+  if (config.silo.mode === "local") {
+    return `nothing leaves this machine; stored as a JSON file at ${config.silo.path}, no node involved`;
+  }
+  if (config.silo.mode === "relay") {
+    return "reached through your gateway node; " + TIER_SUMMARY[config.memoryMode];
+  }
+  return TIER_SUMMARY[config.memoryMode];
+}
+
 /** SILO_MODE=mcp with no completed OAuth pairing. */
 export class NotPairedError extends Error {
   constructor() {
@@ -192,7 +210,7 @@ export async function startAgent(opts: BootOptions): Promise<RunningAgent> {
   // Say which tier this is before anything else. Where memory goes is the
   // decision with the most consequence and the least visibility — every
   // other startup line describes plumbing.
-  log(`memory mode: ${config.memoryMode} — ${TIER_SUMMARY[config.memoryMode]}`);
+  log(`memory mode: ${config.memoryMode} — ${tierSummary(config)}`);
   for (const warning of configWarnings(config)) log(`warning: ${warning}`);
 
   const identity = resolveIdentity(config, log);
