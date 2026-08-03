@@ -1,6 +1,6 @@
 {
   "name": "@onesilo/buzz",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Prototype: gives Buzz (buzz.xyz) long-term memory powered by One Silo. A Buzz agent that ingests channel conversation into shared silos and answers with recalled context.",
   "type": "module",
   "bin": {
