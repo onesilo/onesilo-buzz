@@ -40,7 +40,10 @@ export class FakeRelay implements BuzzRelay {
     const kinds = filter.kinds as number[] | undefined;
     const limit = filter.limit as number | undefined;
     const matched = this.stored.filter((e) => !kinds || kinds.includes(e.kind));
-    return limit ? matched.slice(0, limit) : matched;
+    // Newest-first, like a real relay: `limit` on a REQ returns the most
+    // recent events, not the oldest. Slicing from the front would make
+    // "recent messages" discovery test the opposite of what it does live.
+    return limit ? matched.slice(-limit) : matched;
   }
 
   async publish(template: EventTemplate): Promise<NostrEvent> {

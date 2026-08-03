@@ -124,7 +124,8 @@ export class SiloMemoryAgent {
   }
 
   /**
-   * Channels the agent can see, newest membership first.
+   * Channels the agent is a member of, in whatever order the relay
+   * answered — nothing downstream depends on the ordering.
    *
    * Buzz keeps channel-scoped events out of live fan-out for unscoped
    * subscriptions, so the agent has to name each channel in its REQ — and

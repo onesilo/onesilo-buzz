@@ -453,3 +453,74 @@ test("queryOnce settles on timeout rather than hanging startup", async () => {
     await srv.close();
   }
 });
+
+test("a one-shot query does not advance the live-tail floor", async () => {
+  // Discovery reads history — recent messages from every channel, member
+  // lists — and those results must not move the resubscribe floor. If they
+  // did, a long-running agent that discovers a new channel would set its
+  // floor from that read and skip everything since, which is exactly the
+  // window where the agent was sitting waiting to be added.
+  const srv = await server();
+  const tailSubIds: string[] = [];
+  srv.wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const msg = JSON.parse(String(raw)) as [string, string];
+      if (msg[0] !== "REQ") return;
+      if (!msg[1].startsWith("silo-q-")) {
+        tailSubIds.push(msg[1]); // ids are sequential across both kinds
+        return;
+      }
+      ws.send(
+        JSON.stringify([
+          "EVENT",
+          msg[1],
+          finalizeEvent(
+            {
+              kind: KIND_CHANNEL_MESSAGE,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [[CHANNEL_TAG, "some-other-channel"]],
+              content: "history from a channel we are not tailing",
+            },
+            generateSecretKey()
+          ),
+        ])
+      );
+      ws.send(JSON.stringify(["EOSE", msg[1]]));
+    });
+  });
+
+  const logs: string[] = [];
+  const relay = new WebSocketRelay(srv.url, loadIdentity("OneSilo"), (l) => logs.push(l), 10_000);
+  await relay.connect();
+  try {
+    const history = await relay.queryOnce({ kinds: [KIND_CHANNEL_MESSAGE], limit: 200 });
+    assert.equal(history.length, 1, "the query itself must still work");
+    assert.equal(
+      relay.newestSeenAt,
+      0,
+      "a historical read must not become the agent's idea of now"
+    );
+
+    // A live tail still does advance it — that is the whole point of it.
+    relay.subscribeChannels(["eng"], () => {});
+    const live = finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "delivered live",
+      },
+      generateSecretKey()
+    );
+    await waitFor(() => tailSubIds.length > 0);
+    srv.sockets[0]!.send(JSON.stringify(["EVENT", tailSubIds[0], live]));
+    await waitFor(() => relay.newestSeenAt > 0);
+    assert.equal(relay.newestSeenAt, live.created_at);
+
+    // …and the query's EOSE is never announced as a live subscription.
+    assert.doesNotMatch(logs.join("\n"), /silo-q-\d+ is live/);
+  } finally {
+    relay.close();
+    await srv.close();
+  }
+});

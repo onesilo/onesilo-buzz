@@ -28,6 +28,12 @@ export type EventHandler = (event: NostrEvent) => void;
  */
 const RESUBSCRIBE_SLACK_SECONDS = 60;
 
+/**
+ * Subscription-id prefix for one-shot historical queries, so a stray frame
+ * arriving after the query settled is recognisable as not a live tail.
+ */
+const QUERY_SUB_PREFIX = "silo-q-";
+
 export interface BuzzRelay {
   connect(): Promise<void>;
   /**
@@ -280,14 +286,22 @@ export class WebSocketRelay implements BuzzRelay {
     if (type === "EVENT") {
       const [subId, event] = rest as [string, NostrEvent];
       if (!verifyEvent(event)) return; // never trust unsigned/forged input
-      // created_at is attacker- and clock-controlled: it is whatever the
-      // publishing client stamped. Letting it push the resubscribe floor
-      // into the future would make every later REQ ask for events "since
-      // next Tuesday" — one skewed message and the agent goes deaf until
-      // real time catches up. Never advance the floor past now.
-      const now = Math.floor(Date.now() / 1000);
-      const seenAt = Math.min(event.created_at, now);
-      if (seenAt > this.latestSeenAt) this.latestSeenAt = seenAt;
+      // Only a live tail advances the resubscribe floor. One-shot discovery
+      // queries return history — recent messages from every channel, member
+      // lists — and letting those set the floor would mean a channel
+      // subscribed straight after discovery starts from "now" and silently
+      // skips everything between process start and that point.
+      //
+      // created_at is also attacker- and clock-controlled: it is whatever
+      // the publishing client stamped. Letting it push the floor into the
+      // future would make every later REQ ask for events "since next
+      // Tuesday" — one skewed message and the agent goes deaf until real
+      // time catches up. Never advance the floor past now.
+      if (this.subscriptions.has(subId)) {
+        const now = Math.floor(Date.now() / 1000);
+        const seenAt = Math.min(event.created_at, now);
+        if (seenAt > this.latestSeenAt) this.latestSeenAt = seenAt;
+      }
       this.handlers.get(subId)?.(event);
     } else if (type === "OK") {
       // NIP-01 write acknowledgement. publish() resolves on socket write
@@ -340,9 +354,12 @@ export class WebSocketRelay implements BuzzRelay {
       // it's the only positive confirmation the agent is actually
       // listening, and its absence is what "nothing happens" looks like.
       const [subId] = rest as [string];
-      const onEose = this.eoseHandlers.get(subId);
-      if (onEose) {
-        onEose(); // a one-shot query, not a live tail — don't announce it
+      // A one-shot query is never "live". Keyed off the id prefix rather
+      // than the handler map, because a query that already timed out has
+      // dropped its handler — and a late EOSE arriving afterwards would
+      // otherwise be announced as a live tail that does not exist.
+      if (subId.startsWith(QUERY_SUB_PREFIX)) {
+        this.eoseHandlers.get(subId)?.();
         return;
       }
       this.log(`subscription ${subId} is live`);
@@ -450,6 +467,16 @@ export class WebSocketRelay implements BuzzRelay {
     }
   }
 
+  /**
+   * Newest `created_at` delivered on a live tail — the value that floors
+   * `since` on resubscribe. Exposed because "what does this agent think
+   * the current moment is?" is the state that decides whether a reconnect
+   * replays too much or skips real messages.
+   */
+  get newestSeenAt(): number {
+    return this.latestSeenAt;
+  }
+
   /** Channel ids currently subscribed to (used to spot new ones). */
   subscribedChannels(): Set<string> {
     const ids = new Set<string>();
@@ -465,7 +492,7 @@ export class WebSocketRelay implements BuzzRelay {
   ): Promise<NostrEvent[]> {
     const ws = this.ws;
     if (!ws) throw new Error("relay not connected");
-    const subId = `silo-q-${++this.subSeq}`;
+    const subId = `${QUERY_SUB_PREFIX}${++this.subSeq}`;
     const events: NostrEvent[] = [];
     return new Promise((resolve) => {
       // Resolve on EOSE, or on the timeout with whatever arrived. A
