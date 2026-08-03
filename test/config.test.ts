@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, configWarnings } from "../src/config.js";
 
 // A minimal env that loads cleanly; individual tests override the node URLs.
 function baseEnv(over: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -116,4 +116,121 @@ test("the default agent handle is OneSilo", () => {
   assert.equal(cfg.agentHandle, "OneSilo");
   const overridden = loadConfig({ AGENT_HANDLE: "silo" } as NodeJS.ProcessEnv);
   assert.equal(overridden.agentHandle, "silo");
+});
+
+test("node storage implies node distillation, on every entry point", async () => {
+  // The trap this closes: DISTILL_MODE defaulted to "cloud" globally, and
+  // only `onesilo-buzz run` corrected it. `npm start` with SILO_MODE=node
+  // therefore fell back to the agent's keyword heuristics — one turn at a
+  // time, no cross-turn context — while a model sat idle on the node.
+  const cfg = loadConfig({ SILO_MODE: "node" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "node");
+  assert.equal(cfg.memoryMode, "local");
+});
+
+test("an explicit DISTILL_MODE still wins over the derived default", () => {
+  // It is a legal thing to want, and the config layer is not the place to
+  // refuse it — configWarnings() says what it costs instead.
+  const cfg = loadConfig({
+    SILO_MODE: "node",
+    DISTILL_MODE: "cloud",
+  } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "cloud");
+  const warnings = configWarnings(cfg, {
+    SILO_MODE: "node",
+    DISTILL_MODE: "cloud",
+  } as NodeJS.ProcessEnv);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /keyword heuristics/);
+});
+
+test("a coherent node setup produces no warnings", () => {
+  const env = { SILO_MODE: "node" } as NodeJS.ProcessEnv;
+  assert.deepEqual(configWarnings(loadConfig(env), env), []);
+});
+
+test("MEMORY_MODE expands to the underlying storage and distillation", () => {
+  const local = loadConfig({ MEMORY_MODE: "local" } as NodeJS.ProcessEnv);
+  assert.equal(local.silo.mode, "node");
+  assert.equal(local.distill, "node");
+
+  const hybrid = loadConfig({ MEMORY_MODE: "hybrid" } as NodeJS.ProcessEnv);
+  assert.equal(hybrid.silo.mode, "mcp");
+  assert.equal(hybrid.distill, "node");
+
+  const cloud = loadConfig({ MEMORY_MODE: "cloud" } as NodeJS.ProcessEnv);
+  assert.equal(cloud.silo.mode, "mcp");
+  assert.equal(cloud.distill, "cloud");
+});
+
+test("the tier is named after where the config landed, not what was asked", () => {
+  // Someone who set SILO_MODE/DISTILL_MODE directly — which is most people
+  // with an existing .env — should still be told which tier that is.
+  assert.equal(
+    loadConfig({ SILO_MODE: "mcp", DISTILL_MODE: "node" } as NodeJS.ProcessEnv).memoryMode,
+    "hybrid"
+  );
+  assert.equal(loadConfig({} as NodeJS.ProcessEnv).memoryMode, "cloud");
+  assert.equal(
+    loadConfig({ SILO_MODE: "local" } as NodeJS.ProcessEnv).memoryMode,
+    "local",
+    "the on-disk demo store never reaches the control plane either"
+  );
+});
+
+test("the old variables still win over MEMORY_MODE", () => {
+  // They were the interface first and they are sitting in people's .env
+  // files; a new knob must not silently override what they already set.
+  const cfg = loadConfig({
+    MEMORY_MODE: "cloud",
+    SILO_MODE: "node",
+  } as NodeJS.ProcessEnv);
+  assert.equal(cfg.silo.mode, "node");
+  assert.equal(cfg.memoryMode, "local");
+});
+
+test("an unknown MEMORY_MODE is refused rather than silently ignored", () => {
+  // Falling back to the default would put memory somewhere the operator
+  // did not choose — the one thing this setting exists to control.
+  assert.throws(
+    () => loadConfig({ MEMORY_MODE: "offline" } as NodeJS.ProcessEnv),
+    /must be one of local, hybrid, cloud/
+  );
+});
+
+test("an explicit MEMORY_MODE beats a leftover SILO_MODE", () => {
+  // The privacy-worst direction: MEMORY_MODE=hybrid alongside a SILO_MODE
+  // left in an older .env resolved to CLOUD distillation, so raw transcripts
+  // left the machine — the one thing choosing hybrid says not to do.
+  const cfg = loadConfig({
+    MEMORY_MODE: "hybrid",
+    SILO_MODE: "mcp",
+  } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "node");
+  assert.equal(cfg.memoryMode, "hybrid");
+});
+
+test("a bare SILO_MODE keeps the legacy cloud default", () => {
+  // Without a stated preference, an old config must not silently inherit a
+  // tier nobody asked for.
+  const cfg = loadConfig({ SILO_MODE: "mcp" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "cloud");
+});
+
+test("the on-disk store is described as a file, not as a node", async () => {
+  // Two very different setups share the `local` tier. Announcing "stored on
+  // your node" for the JSON demo store sends people looking for a node that
+  // was never part of it.
+  const { startAgent } = await import("../src/boot.js");
+  const lines: string[] = [];
+  const cfg = loadConfig({ SILO_MODE: "local" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.memoryMode, "local");
+
+  // startAgent logs the mode before doing anything that needs a relay, so
+  // the connection failure afterwards is expected and irrelevant here.
+  await startAgent({ config: cfg, log: (l) => lines.push(l) }).catch(() => {});
+  const summary = lines.find((l) => l.startsWith("memory mode:"));
+  assert.ok(summary, "the mode must be stated at boot");
+  assert.match(summary, /JSON file/);
+  assert.doesNotMatch(summary, /on your node/);
 });

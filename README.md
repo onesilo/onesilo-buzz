@@ -94,14 +94,34 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 If it still reports outdated Command Line Tools:
 `sudo rm -rf /Library/Developer/CommandLineTools && sudo xcode-select --install`.
 
-`run` walks the whole setup: it offers to install a
-[onesilo-node](https://github.com/onesilo/onesilo-node) so conversation is
-distilled on your own machine, initializes it with the node's own
-non-interactive setup, starts the agent, and prints the npub to add to your
+`run` walks the whole setup: it asks where your workspace's memory should
+live, installs a [onesilo-node](https://github.com/onesilo/onesilo-node) if
+your answer needs one, starts the agent, and prints the npub to add to your
 channels.
 
 ```
-Install onesilo-node so that memory is retained on this machine? [Y/n] y
+Where should this workspace's memory live?
+
+  1. Hybrid — private capture, cloud enrichment (default)
+     A local model distills conversation on this machine; only the
+     resulting statements reach your silo, where they are enriched.
+     Raw conversation never leaves. @mentions still get a composed answer.
+     Trade-off: needs a onesilo-node, and distillation is only as good as
+     the local model.
+
+  2. Cloud — best recall
+     Conversation transcripts are sent to your silo, distilled there with
+     full turn context, and enriched (entities, topics, relationships).
+     @mentions get a composed, grounded answer.
+     Trade-off: raw conversation leaves this machine.
+
+  3. Local — nothing leaves this machine
+     Distilled and stored entirely on your onesilo-node. Nothing is sent
+     to One Silo at all.
+     Trade-off: no enrichment, and @mentions return a ranked list of
+     memories with citations rather than a composed answer.
+
+Choose 1-3 [1]: 1
 [onesilo-buzz] Installing onesilo-node with Homebrew (builds from source; this can take a few minutes)…
 [onesilo-buzz] Initializing the node with default settings (first run downloads Ollama and a local model — this can take a while)…
    ... the node's non-interactive setup runs ...
@@ -118,10 +138,11 @@ Install onesilo-node so that memory is retained on this machine? [Y/n] y
   relay      wss://onesilo.communities.buzz.xyz
 ```
 
-Answering **n** runs without a node: the agent still works, but raw
-transcripts are sent to your silo for distillation rather than staying on
-your machine. That choice is asked rather than assumed, and if you say yes
-and the install fails, `run` stops instead of quietly doing the opposite.
+See [Memory modes](#memory-modes) for the full trade-offs. The choice is
+asked rather than assumed, and if you pick a mode that keeps conversation on
+this machine and the node can't be installed, `run` **stops** rather than
+quietly syncing to the cloud instead — silently doing the opposite of what
+you chose would be worse than not starting.
 
 A node started this way lives exactly as long as `onesilo-buzz` — it is a
 child process, not a background service. Nothing is installed into launchd
@@ -130,9 +151,9 @@ want a node that runs on its own schedule, run `onesilo-node` yourself (or
 use [Silo Desktop](https://onesilo.com)); `onesilo-buzz run` detects one that
 is already answering and leaves it alone.
 
-Flags: `--yes` takes the recommended answer to every prompt, `--no-node`
-skips the node question entirely. Setting `DISTILL_MODE` yourself disables
-the question too.
+Flags: `--yes` takes the recommended answer to every prompt (which is
+`hybrid`, so it still installs a node), `--no-node` forces `cloud`. Setting
+`MEMORY_MODE`, `SILO_MODE` or `DISTILL_MODE` skips the question entirely.
 
 The tap ([onesilo/homebrew-tap](https://github.com/onesilo/homebrew-tap)) is
 live, and its formula installs the published npm package, so `brew install
@@ -320,18 +341,57 @@ Memory lives in **silos**, and one agent isn't limited to one:
   configured bucket the connection hasn't been granted — so a
   misconfigured map fails loudly at startup, not silently at capture time.
 
+## Memory modes
+
+Where a workspace's conversation is distilled and stored is the decision with
+the most consequence in this setup, so `onesilo-buzz run` asks it directly on
+first run and saves the answer to `.env` — delete that line to be asked
+again. Setting `MEMORY_MODE` (or `SILO_MODE`/`DISTILL_MODE`) skips the
+question entirely.
+
+| | What leaves your machine | Enrichment | `@mention` answer | Needs a node |
+|---|---|---|---|---|
+| **`hybrid`** *(recommended)* | distilled statements only | yes | composed, grounded | yes |
+| **`cloud`** | full transcripts | yes | composed, grounded | no |
+| **`local`** | nothing | no | ranked list with citations | yes |
+
+**`cloud`** sends transcripts to your silo, which distills them *with full
+turn context* — so "yeah let's do that" is captured next to the turn it
+refers to — then runs the enrichment pass (entities, topics, relationships).
+Best recall, least local.
+
+**`hybrid`** puts a local model in front: a onesilo-node distills conversation
+on your machine, and only the resulting statements sync. You keep enrichment
+and composed answers; raw conversation never leaves. The trade is that
+distillation is only as good as the local model, and it has less context to
+work with than the cloud pipeline.
+
+**`local`** keeps everything on the node — nothing reaches One Silo at all.
+The cost is real and worth understanding before choosing it: the node's
+memory API is SQLite + FTS5 (fused with vector recall when its compute
+capability is on), with no enrichment pipeline behind it. It also implements
+neither `silo_ask` nor `silo_get_context`, so an `@mention` degrades from a
+composed answer to a ranked list of memories with citations, and `!memories`
+becomes a keyword search.
+
+`SILO_MODE` and `DISTILL_MODE` still work and still take precedence — they
+were the interface first. `MEMORY_MODE` just names the three combinations
+worth having. Node storage implies node distillation, so `SILO_MODE=node`
+alone is the same as `MEMORY_MODE=local`.
+
 ## Configuration
 
 Everything is environment-driven — see [`.env.example`](.env.example).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `MEMORY_MODE` | *(asked on first run, then saved)* | `cloud`, `hybrid`, or `local` — see [Memory modes](#memory-modes) |
 | `BUZZ_RELAY_URL` | *(asked on first run)* | Your Buzz workspace relay; `ws://localhost:7777` for local dev |
 | `BUZZ_CHANNEL_IDS` | *(auto-discovered)* | Comma-separated channels to listen in; set it to pin the agent to a subset |
 | `AGENT_HANDLE` | `OneSilo` | The agent's @handle |
 | `AGENT_PICTURE_URL` | One Silo mark | Avatar published in the agent's profile; set empty for none |
 | `AGENT_SECRET_KEY` | *(generated)* | Pin the agent's Nostr identity |
-| `SILO_MODE` | `mcp` | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
+| `SILO_MODE` | *(from `MEMORY_MODE`)* | `mcp` (One Silo direct), `relay` (One Silo via a gateway node), `node` (node-local memory), `local` (JSON file) |
 | `SILO_SERVER_URL` | `https://connect.onesilo.com` | Silo control plane (OAuth + MCP) |
 | `SILO_ID` | `default` | Default memory bucket (`default` = the agent's own silo) |
 | `SILO_CHANNEL_MAP` | *(empty)* | Per-channel buckets: `channel=silo_id,…` |
@@ -339,7 +399,7 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 | `CAPTURE_WINDOW_TURNS` | `12` | Turns buffered before a segment flushes |
 | `CAPTURE_OVERLAP_TURNS` | `2` | Turns carried into the next segment as context |
 | `CAPTURE_IDLE_FLUSH_SECONDS` | `600` | Quiet time that closes an episode |
-| `DISTILL_MODE` | `cloud` | `cloud` (silo distills raw segments) or `node` (a local onesilo-node distills; only statements leave the machine) |
+| `DISTILL_MODE` | *(from `MEMORY_MODE`; `node` storage implies `node`)* | `cloud` (silo distills raw segments) or `node` (a local onesilo-node distills; only statements leave the machine) |
 | `NODE_URL` | `http://127.0.0.1:8766` | onesilo-node admin API (distillation, status) |
 | `NODE_ADMIN_TOKEN` | *(from `~/.onesilo-node/admin.token`)* | Explicit node admin token override |
 | `NODE_LAN_URL` | `http://127.0.0.1:8765` | onesilo-node LAN API (memory, `/v1/cloud` relay) |

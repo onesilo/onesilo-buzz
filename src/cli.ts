@@ -27,10 +27,10 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig, loadDotEnv, DEFAULT_RELAY_URL } from "./config.js";
-import type { Config } from "./config.js";
+import type { Config, MemoryMode } from "./config.js";
 import { startAgent, NotPairedError } from "./boot.js";
 import { SiloOAuthClient } from "./silo/oauth.js";
-import { askText, askYesNo, type Answer } from "./cli/prompt.js";
+import { askText, askYesNo, askChoice, type Choice } from "./cli/prompt.js";
 import {
   detectNode,
   installNode,
@@ -67,93 +67,210 @@ Usage:
 
 Flags:
   -y, --yes     Accept the recommended answer to every prompt
-      --no-node Skip the local node; distillation runs in the cloud
+      --no-node Skip the local node; everything runs in the cloud
 
-Environment overrides every prompt — see .env.example. Setting DISTILL_MODE
-explicitly disables the node question entirely.
+Memory modes (asked on first run and saved to .env; or set MEMORY_MODE):
+  cloud   transcripts go to your silo, distilled there and enriched
+  hybrid  distilled on this machine; only statements sync, still enriched
+  local   nothing leaves this machine; no enrichment
+
+Environment overrides every prompt — see .env.example. Setting MEMORY_MODE,
+SILO_MODE or DISTILL_MODE skips the mode question entirely.
 `;
 
+/** The tier picker, shown when nothing in the environment has decided yet. */
+const MEMORY_CHOICES: Choice<MemoryMode>[] = [
+  {
+    value: "hybrid",
+    label: "Hybrid — private capture, cloud enrichment",
+    lines: [
+      "A local model distills conversation on this machine; only the",
+      "resulting statements reach your silo, where they are enriched.",
+      "Raw conversation never leaves. @mentions still get a composed answer.",
+      "Trade-off: needs a onesilo-node, and distillation is only as good as",
+      "the local model.",
+    ],
+  },
+  {
+    value: "cloud",
+    label: "Cloud — best recall",
+    lines: [
+      "Conversation transcripts are sent to your silo, distilled there with",
+      "full turn context, and enriched (entities, topics, relationships).",
+      "@mentions get a composed, grounded answer.",
+      "Trade-off: raw conversation leaves this machine.",
+    ],
+  },
+  {
+    value: "local",
+    label: "Local — nothing leaves this machine",
+    lines: [
+      "Distilled and stored entirely on your onesilo-node. Nothing is sent",
+      "to One Silo at all.",
+      "Trade-off: no enrichment, and @mentions return a ranked list of",
+      "memories with citations rather than a composed answer.",
+    ],
+  },
+];
+
 /**
- * Decide the distill mode, possibly installing a node on the way.
+ * Whether the environment has settled the tier, and the choices left if not.
  *
- * Returns the mode to run in, or null to abort. Null is used only when the
- * operator asked for local distillation and we could not deliver it —
- * continuing would quietly do the opposite of what they chose.
+ * SILO_MODE alone does NOT settle it. It fixes where memory is *stored*,
+ * which for a cloud silo still leaves the question this flow exists to ask:
+ * does conversation get distilled here or there. Treating it as decided
+ * meant anyone with SILO_MODE=mcp in an older .env silently stopped being
+ * offered local distillation — the old flow asked them, and defaulted to
+ * yes. That is a privacy default quietly moving in the wrong direction.
  */
-async function resolveDistillMode(
+function tierDecision(
+  env: NodeJS.ProcessEnv,
+  config: Config
+): { decidedBy: string } | { choices: MemoryMode[] } {
+  for (const name of ["MEMORY_MODE", "DISTILL_MODE"]) {
+    if (env[name]) return { decidedBy: `${name}=${env[name]}` };
+  }
+  // Node or on-disk storage leaves nothing to ask: both are `local`, and
+  // node storage already implies node distillation.
+  if (config.silo.mode === "node" || config.silo.mode === "local") {
+    return { decidedBy: `SILO_MODE=${config.silo.mode}` };
+  }
+  // A cloud silo (direct or via a gateway node) is compatible with either
+  // distillation side, so offer exactly those two rather than a `local`
+  // option that SILO_MODE would immediately override.
+  if (env.SILO_MODE) return { choices: ["hybrid", "cloud"] };
+  return { choices: ["hybrid", "cloud", "local"] };
+}
+
+/**
+ * Settle which memory tier this run uses, installing a node if the answer
+ * needs one.
+ *
+ * Returns the tier, or null to abort. Null is used only when the operator
+ * chose a tier that keeps conversation on this machine and we could not
+ * deliver it — continuing would quietly do the opposite of what they chose,
+ * which is the one outcome worse than not starting.
+ */
+async function resolveMemoryMode(
   config: Config,
   flags: Flags,
   runner: Runner
-): Promise<"cloud" | "node" | null> {
-  // `--no-node` is checked first, before DISTILL_MODE. Both are explicit
-  // operator decisions, but a flag typed on this invocation is more immediate
-  // than an environment variable that is usually sitting in a .env file from
-  // some earlier session -- so the flag wins, which is the ordinary
-  // convention. Checking DISTILL_MODE first meant `DISTILL_MODE=node
-  // onesilo-buzz run --no-node` ran node distillation anyway, silently doing the
-  // opposite of the flag's documented meaning.
-  // SILO_MODE=node stores MEMORY on the node — the node isn't a
-  // distillation nicety there, it's the database. Every "continue without
-  // a node" path below is therefore closed when nodeMemory is set:
-  // proceeding would wire NodeMemoryStore against nothing and the agent
-  // would look healthy while every memory operation fails.
-  const nodeMemory = config.silo.mode === "node";
+): Promise<MemoryMode | null> {
+  // A flag typed on this invocation beats a variable sitting in a .env file
+  // from some earlier session, so --no-node is checked first.
+  const settle = (mode: MemoryMode, override: boolean): MemoryMode => {
+    // Make the decision real for the reload in runCommand.
+    //
+    // MEMORY_MODE deliberately loses to SILO_MODE/DISTILL_MODE, so writing
+    // it alone is not enough when we are OVERRIDING one of those — a
+    // leftover DISTILL_MODE=node would quietly win and the agent would
+    // distill on a node the operator just told us to skip.
+    //
+    // Only on an override, though. When the environment already decided,
+    // rewriting the lower-level variables would erase distinctions we are
+    // supposed to preserve — including the incoherent-but-explicit pair
+    // that configWarnings() exists to report rather than silently repair.
+    process.env.MEMORY_MODE = mode;
+    if (override) process.env.DISTILL_MODE = mode === "cloud" ? "cloud" : "node";
+    return mode;
+  };
+
+  /**
+   * Remember the answer, so "asked on first run" is literally true.
+   *
+   * Only when we actually asked: a `--no-node` invocation is a decision
+   * about this run, and writing it to .env would silently make a one-off
+   * flag permanent.
+   */
+  const remember = (mode: MemoryMode): MemoryMode => {
+    persistEnvVar("MEMORY_MODE", mode);
+    log(`Saved MEMORY_MODE=${mode} to .env — delete that line to be asked again.`);
+    return mode;
+  };
+
+  // Whether the CURRENT configuration actually needs a onesilo-node. Not the
+  // same as the `local` tier: SILO_MODE=local is the on-disk demo store,
+  // which is equally "nothing leaves this machine" and needs no node at all.
+  // `relay` is in here because it reaches One Silo *through* the gateway
+  // node's LAN API — it needs one just as much as node storage does.
+  const configNeedsNode =
+    config.silo.mode === "node" ||
+    config.silo.mode === "relay" ||
+    config.distill === "node";
 
   if (flags.noNode) {
-    if (nodeMemory) {
+    if (config.silo.mode === "node" || config.silo.mode === "relay") {
       console.error(
-        "SILO_MODE=node keeps memory on a local onesilo-node — --no-node contradicts it.\n" +
-          "Drop --no-node, or change SILO_MODE in .env."
+        `This configuration reaches memory through a local onesilo-node ` +
+          `(SILO_MODE=${config.silo.mode}) — --no-node contradicts it.\n` +
+          "Drop --no-node, or change MEMORY_MODE in .env."
       );
       return null;
     }
-    if (process.env.DISTILL_MODE && process.env.DISTILL_MODE !== "cloud") {
-      log(
-        `--no-node overrides DISTILL_MODE=${process.env.DISTILL_MODE} — distilling in the cloud.`
-      );
-    }
-    return "cloud";
+    // Nothing to skip: the on-disk demo store never wanted a node, so the
+    // flag is a no-op rather than a reason to move memory somewhere else.
+    if (!configNeedsNode) return config.memoryMode;
+    log("--no-node overrides hybrid mode — transcripts will be distilled in the cloud.");
+    return settle("cloud", true);
   }
 
-  // An explicit DISTILL_MODE is an operator decision already made. Asking
-  // again would be noise, and overriding it would be worse. With node
-  // memory the setting is honored too — but only after the node itself is
-  // ensured below.
-  if (process.env.DISTILL_MODE && !nodeMemory) {
-    log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
-    return config.distill;
+  const decision = tierDecision(process.env, config);
+  const chosen = "decidedBy" in decision;
+  if (chosen) {
+    log(`${decision.decidedBy} is set — running in ${config.memoryMode} mode.`);
+  }
+  const asked = !chosen;
+  const offered = chosen
+    ? MEMORY_CHOICES
+    : MEMORY_CHOICES.filter((c) => decision.choices.includes(c.value));
+  const mode = chosen
+    ? config.memoryMode
+    : await askChoice("Where should this workspace's memory live?", offered, {
+        // Hybrid is the recommendation, and it is also what this flow did
+        // before the tiers were named: the old question defaulted to
+        // installing a node, which produced local distillation plus a cloud
+        // silo. Defaulting to `cloud` here would have silently moved every
+        // scripted `--yes` install onto a less private path.
+        default: "hybrid",
+        forced: flags.assumeYes ? "hybrid" : undefined,
+      });
+
+  // Whether a node is needed once the tier is settled.
+  //
+  // Storage can demand one no matter which tier was picked: relay reaches
+  // One Silo *through* the gateway node, so choosing `cloud` there still
+  // needs the node running. Distillation demands one for anything but
+  // cloud. Reading only the tier let a relay + cloud answer skip setup
+  // entirely and start against a store pointed at nothing.
+  const storageNeedsNode =
+    config.silo.mode === "node" || config.silo.mode === "relay";
+  const needsNode =
+    storageNeedsNode || (chosen ? config.distill === "node" : mode !== "cloud");
+
+  if (!needsNode) {
+    settle(mode, false);
+    return asked ? remember(mode) : mode;
   }
 
-  const distillDecision = (): "cloud" | "node" => {
-    if (process.env.DISTILL_MODE) {
-      log(`DISTILL_MODE=${process.env.DISTILL_MODE} is set — leaving it alone.`);
-      return config.distill;
-    }
-    return "node";
-  };
-
+  const needs = storageNeedsNode
+    ? "memory is reached through it"
+    : "it distills conversation before anything is sent";
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
     log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);
-    return distillDecision();
+    settle(mode, false);
+    return asked ? remember(mode) : mode;
   }
 
-  const answer = await askQuestion(state.kind, flags, nodeMemory);
-  if (answer === "no") {
-    if (nodeMemory) {
-      console.error(
-        "SILO_MODE=node needs a running onesilo-node — it is where memory lives.\n" +
-          "Start one and re-run, or change SILO_MODE in .env to use One Silo instead."
-      );
-      return null;
-    }
-    log(
-      "Continuing without a node. Raw conversation transcripts will be sent to " +
-        "your silo for distillation — only add the agent to channels whose " +
-        "content belongs there."
-    );
-    return "cloud";
-  }
+  const question =
+    state.kind === "installed"
+      ? `A onesilo-node is installed but not running. Set it up and start it (${needs})?`
+      : `${mode} mode needs a onesilo-node. Install it now (${needs})?`;
+  const answer = await askYesNo(question, {
+    default: "yes",
+    forced: flags.assumeYes ? "yes" : undefined,
+  });
+  if (answer === "no") return abort();
 
   if (state.kind === "absent") {
     const installed = await installNode(log, runner);
@@ -175,26 +292,8 @@ async function resolveDistillMode(
     );
   }
   log("Node is up.");
-  return distillDecision();
-}
-
-/** The question, phrased for what is actually on the machine and at stake. */
-function askQuestion(
-  kind: "installed" | "absent",
-  flags: Flags,
-  nodeMemory: boolean
-): Promise<Answer> {
-  const why = nodeMemory
-    ? "memory lives on it (SILO_MODE=node)"
-    : "memory is retained on this machine";
-  const question =
-    kind === "installed"
-      ? `A onesilo-node is installed but not running. Set it up and use it so ${why}?`
-      : `Install onesilo-node so that ${why}?`;
-  return askYesNo(question, {
-    default: "yes",
-    forced: flags.assumeYes ? "yes" : undefined,
-  });
+  settle(mode, false);
+  return asked ? remember(mode) : mode;
 }
 
 function abort(detail?: string): null {
@@ -370,12 +469,12 @@ async function runCommand(argv: string[], runner: Runner = systemRunner): Promis
   // read the config after them, not before.
   const config = loadConfig();
 
-  const distill = await resolveDistillMode(config, flags, runner);
-  if (distill === null) return 1;
+  const mode = await resolveMemoryMode(config, flags, runner);
+  if (mode === null) return 1;
 
-  // config is env-derived and frozen at load; re-read it so the store wiring
-  // in boot.ts sees the mode we just settled on.
-  process.env.DISTILL_MODE = distill;
+  // resolveMemoryMode has already written what it settled on into the
+  // environment; config is env-derived and frozen at load, so re-read it and
+  // let boot.ts wire the store from the tier we actually chose.
   const finalConfig = loadConfig();
 
   try {
@@ -483,4 +582,4 @@ if (isInvokedDirectly()) {
   });
 }
 
-export { runCommand, resolveDistillMode, parseFlags, persistEnvVar };
+export { runCommand, resolveMemoryMode, parseFlags, persistEnvVar };
