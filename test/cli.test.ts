@@ -6,7 +6,7 @@
  * fall back to cloud distillation after the operator asked for local.
  */
 
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -21,6 +21,27 @@ import { loadConfig } from "../src/config.js";
 import type { Runner } from "../src/cli/node-setup.js";
 
 /** A Runner that records calls and returns scripted results. */
+/**
+ * The mode variables, as this process started.
+ *
+ * resolveMemoryMode writes its decision into the environment — that is how
+ * the settled tier reaches the reload in runCommand — so without this every
+ * test that calls it leaks a mode into the next one, and `alreadyChosen`
+ * starts short-circuiting questions that were meant to be asked.
+ */
+const MODE_ENV_AT_START: Record<string, string | undefined> = {
+  MEMORY_MODE: process.env.MEMORY_MODE,
+  SILO_MODE: process.env.SILO_MODE,
+  DISTILL_MODE: process.env.DISTILL_MODE,
+};
+
+afterEach(() => {
+  for (const [name, value] of Object.entries(MODE_ENV_AT_START)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
 function fakeRunner(opts: {
   present?: string[];
   exitCodes?: Record<string, number>;
@@ -584,4 +605,52 @@ test("askChoice takes the default without a TTY, and says which", async () => {
   });
   assert.equal(answer, "hybrid");
   assert.match(text(), /using hybrid \(no terminal\)/);
+});
+
+test("--no-node makes the reloaded config actually cloud, not just say so", async () => {
+  // The gap this closes: the existing --no-node test asserted the RETURN
+  // value, which was "cloud" while the config that booted still distilled
+  // on a node. MEMORY_MODE deliberately loses to DISTILL_MODE, so writing
+  // only MEMORY_MODE let a leftover DISTILL_MODE=node quietly win — the
+  // agent would distill on the node the flag just told it to skip, and
+  // report itself as hybrid while doing it.
+  const runner = fakeRunner({ present: ["brew", "onesilo-node"] });
+  process.env.DISTILL_MODE = "node";
+  delete process.env.SILO_MODE;
+  delete process.env.MEMORY_MODE;
+
+  const mode = await resolveMemoryMode(
+    loadConfig({ ...process.env, DISTILL_MODE: "node" }),
+    parseFlags(["--no-node"]),
+    runner
+  );
+  assert.equal(mode, "cloud");
+
+  // The real assertion: what boot.ts would see on the reload.
+  const reloaded = loadConfig(process.env);
+  assert.equal(reloaded.distill, "cloud", "the flag must survive into the config");
+  assert.equal(reloaded.memoryMode, "cloud");
+  assert.deepEqual(runner.calls, []);
+});
+
+test("an environment-chosen mode is passed through, not rewritten", async () => {
+  // The mirror image. Overriding is only correct when we actually made the
+  // decision — rewriting DISTILL_MODE whenever we settle would erase the
+  // explicit incoherent pair that configWarnings() exists to report rather
+  // than silently repair.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "node";
+  process.env.DISTILL_MODE = "cloud";
+  delete process.env.MEMORY_MODE;
+
+  const config = loadConfig(process.env);
+  assert.equal(config.memoryMode, "local");
+  assert.equal(config.distill, "cloud", "the operator's explicit choice stands");
+
+  await resolveMemoryMode(config, parseFlags(["--no-node"]), runner);
+  assert.equal(
+    process.env.DISTILL_MODE,
+    "cloud",
+    "an explicit setting must not be rewritten behind the operator's back"
+  );
 });

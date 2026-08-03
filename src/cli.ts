@@ -137,6 +137,23 @@ async function resolveMemoryMode(
 ): Promise<MemoryMode | null> {
   // A flag typed on this invocation beats a variable sitting in a .env file
   // from some earlier session, so --no-node is checked first.
+  const settle = (mode: MemoryMode, override: boolean): MemoryMode => {
+    // Make the decision real for the reload in runCommand.
+    //
+    // MEMORY_MODE deliberately loses to SILO_MODE/DISTILL_MODE, so writing
+    // it alone is not enough when we are OVERRIDING one of those — a
+    // leftover DISTILL_MODE=node would quietly win and the agent would
+    // distill on a node the operator just told us to skip.
+    //
+    // Only on an override, though. When the environment already decided,
+    // rewriting the lower-level variables would erase distinctions we are
+    // supposed to preserve — including the incoherent-but-explicit pair
+    // that configWarnings() exists to report rather than silently repair.
+    process.env.MEMORY_MODE = mode;
+    if (override) process.env.DISTILL_MODE = mode === "cloud" ? "cloud" : "node";
+    return mode;
+  };
+
   if (flags.noNode) {
     if (config.memoryMode === "local") {
       console.error(
@@ -149,7 +166,7 @@ async function resolveMemoryMode(
     if (config.memoryMode === "hybrid") {
       log("--no-node overrides hybrid mode — transcripts will be distilled in the cloud.");
     }
-    return "cloud";
+    return settle("cloud", true);
   }
 
   const chosen = alreadyChosen(process.env);
@@ -168,7 +185,7 @@ async function resolveMemoryMode(
         forced: flags.assumeYes ? "hybrid" : undefined,
       });
 
-  if (mode === "cloud") return mode;
+  if (mode === "cloud") return settle(mode, !chosen);
 
   // local and hybrid both need a node: one to store memory, one to distill.
   const needs =
@@ -178,7 +195,7 @@ async function resolveMemoryMode(
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
     log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);
-    return mode;
+    return settle(mode, !chosen);
   }
 
   const question =
@@ -211,7 +228,7 @@ async function resolveMemoryMode(
     );
   }
   log("Node is up.");
-  return mode;
+  return settle(mode, !chosen);
 }
 
 function abort(detail?: string): null {
@@ -390,12 +407,9 @@ async function runCommand(argv: string[], runner: Runner = systemRunner): Promis
   const mode = await resolveMemoryMode(config, flags, runner);
   if (mode === null) return 1;
 
-  // config is env-derived and frozen at load; re-read it so the store wiring
-  // in boot.ts sees the tier we just settled on. Setting MEMORY_MODE rather
-  // than the two underlying variables keeps one source of truth — and it is
-  // a no-op when SILO_MODE/DISTILL_MODE are already set, which is exactly
-  // when we did not ask.
-  process.env.MEMORY_MODE = mode;
+  // resolveMemoryMode has already written what it settled on into the
+  // environment; config is env-derived and frozen at load, so re-read it and
+  // let boot.ts wire the store from the tier we actually chose.
   const finalConfig = loadConfig();
 
   try {
