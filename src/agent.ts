@@ -73,6 +73,19 @@ const CHANNEL_SYNC_MS = 30_000;
 /** Recent messages scanned when member lists aren't available. */
 const DISCOVERY_MESSAGE_LIMIT = 200;
 
+/**
+ * Result of a discovery sweep.
+ *
+ * `authoritative` records whether the relay actually answered the
+ * membership question. An empty `channels` means "in no channel" when
+ * authoritative and "could not find out" when not — the same value, and
+ * opposite instructions for whether to stop listening.
+ */
+interface Discovery {
+  channels: string[];
+  authoritative: boolean;
+}
+
 const COMMAND = /^!(remember|recall|memories|forget)\b\s*([\s\S]*)$/i;
 
 const SEEN_EVENTS_MAX = 2000;
@@ -140,12 +153,18 @@ export class SiloMemoryAgent {
    * fall back to the channels of recent messages, which is what the agent
    * could observe anyway.
    */
-  private async discoverChannels(): Promise<string[]> {
+  private async discoverChannels(): Promise<Discovery> {
     const found = new Set<string>();
     const query = this.relay.queryOnce?.bind(this.relay);
-    if (!query) return [];
+    if (!query) return { channels: [], authoritative: false };
+    // Whether the relay serves member lists at all. This is the difference
+    // between "it cannot tell us who is in what" and "it told us, and the
+    // answer is none" — which look identical in the result set and mean
+    // opposite things.
+    let memberListsServed = false;
     try {
       const lists = await query({ kinds: [KIND_MEMBER_LIST] });
+      memberListsServed = lists.length > 0;
       for (const list of lists) {
         const channelId = list.tags.find((t) => t[0] === "d")?.[1];
         if (!channelId) continue;
@@ -175,11 +194,16 @@ export class SiloMemoryAgent {
       this.log(`channel discovery via recent messages failed: ${err}`);
     }
 
-    if (found.size > 0) {
-      // A member list that came back short (a relay's default limit, partial
-      // indexing) would leave the agent quietly deaf in the channels it
-      // missed. It can't be fixed by trusting traffic instead, but it can be
-      // made loud rather than silent.
+    if (memberListsServed) {
+      // Authoritative, INCLUDING when it says the agent is in nothing.
+      // Falling through to traffic here would resubscribe the agent to a
+      // channel it was just removed from — the relay would have told us so,
+      // and we'd have overruled it with "well, I can still see messages".
+      //
+      // A member list that came back short (a relay's default limit,
+      // partial indexing) leaves the agent deaf in the channels it missed.
+      // Trusting traffic instead can't fix that without over-collecting,
+      // but the discrepancy can at least be loud rather than silent.
       const missing = [...seenInTraffic].filter((id) => !found.has(id));
       if (missing.length > 0) {
         this.log(
@@ -188,9 +212,11 @@ export class SiloMemoryAgent {
             `there. If the agent belongs in one, set BUZZ_CHANNEL_IDS.`
         );
       }
-      return [...found];
+      return { channels: [...found], authoritative: true };
     }
-    return [...seenInTraffic];
+    // No member lists at all: the relay can't answer the membership
+    // question, so this is a guess, and it must not drive revocation.
+    return { channels: [...seenInTraffic], authoritative: false };
   }
 
   /**
@@ -201,16 +227,19 @@ export class SiloMemoryAgent {
    */
   private async syncChannelSubscriptions(): Promise<void> {
     const configured = this.options.channelIds ?? [];
-    const channels = configured.length > 0 ? configured : await this.discoverChannels();
+    const { channels, authoritative } =
+      configured.length > 0
+        ? { channels: configured, authoritative: true }
+        : await this.discoverChannels();
     const already = this.relay.subscribedChannels?.() ?? new Set<string>();
     const fresh = channels.filter((id) => !already.has(id));
 
-    // Stop listening to channels the agent has been removed from. Guarded on
-    // a non-empty result: a relay hiccup or a failed query returns nothing,
-    // and treating that as "removed from everything" would take the agent
-    // offline until the next sweep. Only a positive answer about current
-    // membership is allowed to revoke.
-    if (channels.length > 0 && this.relay.unsubscribeChannels) {
+    // Stop listening to channels the agent has been removed from. Gated on
+    // an AUTHORITATIVE answer, not a non-empty one: "the relay told us the
+    // membership and we're in none of it" must revoke, while "the relay
+    // couldn't tell us" must not — those are the same empty list and
+    // opposite instructions.
+    if (authoritative && this.relay.unsubscribeChannels) {
       const current = new Set(channels);
       const gone = [...already].filter((id) => !current.has(id));
       if (gone.length > 0) {
@@ -222,13 +251,18 @@ export class SiloMemoryAgent {
     }
 
     if (fresh.length === 0) {
-      // Nothing new. On the very first sweep with nothing found, still open
-      // the unscoped subscription: it is the correct "everything visible"
+      // Nothing new. On the very first sweep with nothing found, open the
+      // unscoped subscription: it is the correct "everything visible"
       // behavior on relays that fan out globally (self-hosted, the
       // in-process demo relay), and on Buzz-style relays it still supplies
       // history across reconnects. Hard-coding one relay's fan-out rule as
       // "never subscribe globally" would break every other one.
-      if (!this.subscriptionOpened) {
+      //
+      // Except when the relay authoritatively said the agent is in nothing.
+      // Then an unscoped subscription would capture every channel on a
+      // global-fan-out relay while its membership is empty — over-collecting
+      // on exactly the evidence that should have stopped it.
+      if (!this.subscriptionOpened && !authoritative) {
         this.subscriptionOpened = true;
         this.relay.subscribeChannels([], (event) => this.enqueue(event));
       }

@@ -907,3 +907,96 @@ test("channels seen in traffic but absent from member lists are reported, not jo
   assert.match(logs.join("\n"), /someone-/);
   await agent.stop();
 });
+
+test("member lists that omit the agent revoke, rather than falling back to traffic", async () => {
+  // The removal case. Once the agent is dropped from its only channel, the
+  // member lists still come back — they just don't name it. Treating that
+  // as "no member lists, guess from traffic" would resubscribe it to the
+  // very channel it was removed from, overruling the relay with "well, I
+  // can still see messages there".
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  const now = Math.floor(Date.now() / 1000);
+  const memberList = (channelId: string, members: string[]) =>
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: now,
+        tags: [["d", channelId], ...members.map((p) => ["p", p])],
+        content: "",
+      },
+      other
+    );
+  const traffic = finalizeEvent(
+    {
+      kind: KIND_CHANNEL_MESSAGE,
+      created_at: now,
+      tags: [[CHANNEL_TAG, "eng"]],
+      content: "still chatting in here",
+    },
+    other
+  );
+
+  relay.stored = [memberList("eng", [identity.pubkey]), traffic];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["eng"]));
+
+  // Removed from #eng. The list still exists; it just no longer names us —
+  // and the channel is still visibly busy.
+  relay.stored = [memberList("eng", ["someone-else"]), traffic];
+  await agent.syncForTest();
+
+  assert.equal(
+    relay.subscribedChannels().size,
+    0,
+    "traffic must not resurrect a channel the relay says we are not in"
+  );
+  assert.match(logs.join("\n"), /no longer in 1 channel/);
+  await agent.stop();
+});
+
+test("an authoritative empty membership opens no unscoped subscription", async () => {
+  // On a relay that fans out globally, an unscoped subscription captures
+  // everything. Opening one while the relay is telling us the agent belongs
+  // to no channel would over-collect on exactly the evidence that should
+  // have stopped it.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "someone-elses"], ["p", "not-us"]],
+        content: "",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "someone-elses"]],
+        content: "!remember this should not be captured",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+  assert.equal(
+    relay.published.filter((e) => e.kind === KIND_CHANNEL_MESSAGE).length,
+    0,
+    "nothing should have been captured or answered"
+  );
+  await agent.stop();
+});
