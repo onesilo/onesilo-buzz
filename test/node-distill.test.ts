@@ -262,3 +262,36 @@ test("node/distill/silo-mode config parsing with out-of-the-box defaults", () =>
   // Unknown modes fall back to mcp instead of crashing.
   assert.equal(loadConfig({ SILO_MODE: "banana" }).silo.mode, "mcp");
 });
+
+test("the local model call is announced before it starts and timed when it ends", async () => {
+  // Distillation is the slowest thing the agent does — a cold local model
+  // under a two-minute ceiling. The operator has to be able to tell "the
+  // model is thinking" from "the agent is wedged", so the announcement must
+  // precede the call, not summarize it afterwards.
+  const { store: inner } = fakeInner();
+  const logs: string[] = [];
+  let release!: () => void;
+  const pending = new Promise<void>((r) => (release = r));
+  const slowNode = {
+    url: "http://127.0.0.1:8766",
+    hasToken: true,
+    health: async () => true,
+    generate: async () => {
+      await pending;
+      return { text: "decision: ship on Friday", model: "llama3.2" };
+    },
+  } as unknown as SiloNodeClient;
+
+  const store = wrapWithNodeDistillation(inner, slowNode, (l) => logs.push(l));
+  const flushing = store.rememberTranscript!(
+    segment([turn("alicepk00", "let's ship Friday")])
+  );
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.match(logs.join("\n"), /distilling 1 turn\(s\) from #eng on the local model/);
+  assert.doesNotMatch(logs.join("\n"), /replied in/, "must not claim a reply yet");
+
+  release();
+  await flushing;
+  assert.match(logs.join("\n"), /local model \(llama3\.2\) replied in \d/);
+});

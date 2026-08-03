@@ -24,6 +24,7 @@ import {
   type ChannelMessage,
 } from "./buzz/events.js";
 import type { AgentIdentity } from "./buzz/identity.js";
+import { since, preview } from "./log.js";
 import type { MemoryStore } from "./silo/types.js";
 import {
   extractMemories,
@@ -72,6 +73,12 @@ export class SiloMemoryAgent {
   /** Serializes event handling so replies can't outrun earlier captures. */
   private queue: Promise<void> = Promise.resolve();
   /**
+   * Events accepted but not yet handled. Only used for logging: because the
+   * queue is strictly serial, one slow local-model call stalls every message
+   * behind it, and without this the agent just looks unresponsive.
+   */
+  private queued = 0;
+  /**
    * Bounded FIFO dedup of relay redeliveries by event id. Eviction reopens
    * a window for very old redeliveries, but memory ids are deterministic
    * per event, so re-capture is idempotent for id-keyed stores, and the
@@ -109,14 +116,33 @@ export class SiloMemoryAgent {
       this.log(`could not publish the agent profile (continuing unnamed): ${err}`);
     }
     this.relay.subscribeChannels(this.options.channelIds ?? [], (event) => {
+      // Our own replies come back on our own subscription — the relay
+      // serves every event matching the filter, ours included. handleEvent
+      // drops them anyway, but dropping them here keeps them out of the
+      // backlog count: a reply published mid-turn echoes back while that
+      // turn is still running, which would otherwise report a message
+      // waiting behind it that does not exist.
+      if (event.pubkey === this.identity.pubkey) return;
       // Events are processed strictly in arrival order: a !recall must see
       // the memories of every message delivered before it, and a redelivered
       // event must not be captured twice.
-      this.queue = this.queue.then(() =>
-        this.handleEvent(event).catch((err) =>
-          this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
+      this.queued += 1;
+      if (this.queued > 1) {
+        // Serial handling means the wait is real, not a relay delay — say so
+        // rather than letting the agent look asleep.
+        this.log(
+          `${event.id.slice(0, 8)} is waiting on ${this.queued - 1} earlier message(s)`
+        );
+      }
+      this.queue = this.queue
+        .then(() =>
+          this.handleEvent(event).catch((err) =>
+            this.log(`error handling event ${event.id.slice(0, 8)}: ${err}`)
+          )
         )
-      );
+        .finally(() => {
+          this.queued -= 1;
+        });
     });
     // Idle episodes flush on a timer; chained onto the queue so flushes
     // never interleave with in-flight event handling.
@@ -172,14 +198,14 @@ export class SiloMemoryAgent {
 
     const command = msg.content.trim().match(COMMAND);
     if (command) {
-      await this.answering(msg, () =>
+      await this.answering(msg, `!${command[1]!.toLowerCase()}`, () =>
         this.handleCommand(msg, command[1]!.toLowerCase(), (command[2] ?? "").trim())
       );
       return;
     }
 
     if (isAddressedTo(msg, this.identity.pubkey, this.identity.handle)) {
-      await this.answering(msg, () => this.handleMention(msg));
+      await this.answering(msg, "mention", () => this.handleMention(msg));
       return;
     }
 
@@ -199,16 +225,20 @@ export class SiloMemoryAgent {
    * re-captured). Failures restore the fresh turns for the next flush.
    */
   private async flushSegment(segment: TranscriptSegment): Promise<void> {
+    const started = Date.now();
     try {
       if (this.store.rememberTranscript) {
+        this.log(
+          `capturing ${segment.fresh.length} turn(s) from #${segment.channelId} (${segment.reason})…`
+        );
         const outcome = await this.store.rememberTranscript(segment);
         if (outcome.status === "needs_confirmation") {
           this.log(
-            `segment capture held for owner confirmation (#${segment.channelId}, ${segment.fresh.length} turns)`
+            `segment capture held for owner confirmation (#${segment.channelId}, ${segment.fresh.length} turns, ${since(started)})`
           );
         } else {
           this.log(
-            `captured segment #${segment.channelId} (${segment.fresh.length} fresh turns, reason=${segment.reason})`
+            `captured segment #${segment.channelId} (${segment.fresh.length} fresh turns, reason=${segment.reason}) in ${since(started)}`
           );
         }
         return;
@@ -226,7 +256,8 @@ export class SiloMemoryAgent {
     } catch (err) {
       this.window.restore(segment);
       this.log(
-        `segment capture failed #${segment.channelId} (${segment.fresh.length} turns retained for retry): ${err}`
+        `segment capture failed #${segment.channelId} after ${since(started)} ` +
+          `(${segment.fresh.length} turns retained for retry): ${err}`
       );
     }
   }
@@ -244,18 +275,29 @@ export class SiloMemoryAgent {
    */
   private async answering(
     msg: ChannelMessage,
+    kind: string,
     handler: () => Promise<void>
   ): Promise<void> {
+    const id = msg.event.id.slice(0, 8);
+    const started = Date.now();
+    // Announce the start, not just the finish. Everything downstream of here
+    // can take tens of seconds on a local model, and a silent agent is
+    // indistinguishable from a dead one — which is exactly the confusion
+    // this line exists to remove.
+    this.log(
+      `${id} thinking about a ${kind} in #${msg.channelId} from ${this.who(msg.authorPubkey)}: "${preview(msg.content)}"`
+    );
     try {
       await handler();
+      this.log(`${id} done in ${since(started)}`);
     } catch (err) {
       if (err instanceof DeliveryError) {
         // The silo work succeeded; only the reply couldn't reach the relay.
         // An apology would be wrong ("silo error") and undeliverable anyway.
-        this.log(`could not deliver reply ${msg.event.id.slice(0, 8)}: ${err.message}`);
+        this.log(`could not deliver reply ${id} after ${since(started)}: ${err.message}`);
         return;
       }
-      this.log(`error answering ${msg.event.id.slice(0, 8)}: ${err}`);
+      this.log(`error answering ${id} after ${since(started)}: ${err}`);
       try {
         await this.reply(
           msg,
@@ -363,11 +405,27 @@ export class SiloMemoryAgent {
    * product. Otherwise recall raw memories and format locally.
    */
   private async answer(query: string, channelId?: string): Promise<string> {
+    // Timed separately from the enclosing turn: when a reply is slow this is
+    // almost always where the time went, and knowing whether it was the silo
+    // or everything else is the difference between a config problem and a
+    // model-too-big-for-this-machine problem.
+    const started = Date.now();
     if (this.store.ask) {
-      return this.store.ask(query, channelId);
+      this.log(`asking the silo: "${preview(query)}"`);
+      const answer = await this.store.ask(query, channelId);
+      this.log(`silo answered in ${since(started)}`);
+      return answer;
     }
+    this.log(`searching memory for: "${preview(query)}"`);
     const results = await this.store.recall({ text: query, channelId, limit: 5 });
+    this.log(`memory search returned ${results.length} result(s) in ${since(started)}`);
     return formatRecall(query, results, this.names);
+  }
+
+  /** Display name for logs, falling back to a short pubkey. */
+  private who(pubkey: string): string {
+    const name = this.names.get(pubkey);
+    return name ? `@${name}` : pubkey.slice(0, 8);
   }
 
   private async reply(to: ChannelMessage, content: string): Promise<void> {

@@ -506,3 +506,128 @@ test("a failed profile publish does not stop the agent", async () => {
   assert.match(logs.join("\n"), /continuing unnamed/);
   await agent.stop();
 });
+
+test("the agent says it is thinking BEFORE the slow work finishes", async () => {
+  // The whole point: on a local model a reply can take a minute, and the
+  // operator needs to see that the message landed and work started. A line
+  // emitted only after the answer is ready would prove nothing — so this
+  // asserts the announcement while the store call is still pending.
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  let releaseRecall!: () => void;
+  const pending = new Promise<void>((r) => (releaseRecall = r));
+  const slow: MemoryStore = {
+    remember: async () => ({ status: "stored", id: "m1" }),
+    recall: async () => {
+      await pending;
+      return [];
+    },
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, slow, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  const handling = agent.handleEvent(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!recall the staging database",
+      },
+      generateSecretKey()
+    )
+  );
+  await new Promise((r) => setTimeout(r, 20)); // reach the blocked recall
+
+  const soFar = logs.join("\n");
+  assert.match(soFar, /thinking about a !recall in #eng/);
+  assert.match(soFar, /searching memory for: "the staging database"/);
+  assert.doesNotMatch(soFar, /done in /, "the turn must not be reported finished yet");
+
+  releaseRecall();
+  await handling;
+  const after = logs.join("\n");
+  assert.match(after, /memory search returned 0 result\(s\) in \d/);
+  assert.match(after, /done in \d/, "the finished turn must report how long it took");
+  await agent.stop();
+});
+
+test("a message waiting behind a slow turn says so", async () => {
+  // Handling is strictly serial, so a slow local model stalls everything
+  // behind it. Without this line the queued messages look dropped.
+  const identity = loadIdentity("silo");
+  const relay = new FakeRelay(identity.secretKey);
+  const logs: string[] = [];
+  let release!: () => void;
+  const pending = new Promise<void>((r) => (release = r));
+  const slow: MemoryStore = {
+    remember: async () => ({ status: "stored", id: "m1" }),
+    recall: async () => {
+      await pending;
+      return [];
+    },
+    forget: async () => false,
+    recent: async () => [],
+  };
+  const agent = new SiloMemoryAgent(relay, slow, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  const userSk = generateSecretKey();
+  const send = (content: string) =>
+    relay.deliver(
+      finalizeEvent(
+        {
+          kind: KIND_CHANNEL_MESSAGE,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [[CHANNEL_TAG, "eng"]],
+          content,
+        },
+        userSk
+      )
+    );
+  send("!recall the staging database"); // blocks on `pending`
+  send("!recall anything else"); // has to wait for it
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.match(logs.join("\n"), /is waiting on 1 earlier message/);
+  release();
+  await agent.stop();
+});
+
+test("the agent's own reply echoing back is not reported as a backlog", async () => {
+  // Relays serve every event matching the filter, our own replies included,
+  // and the echo lands while the turn that published it is still running.
+  // Counting it would report a message waiting behind that turn when
+  // nothing is actually queued.
+  const { identity, relay, say } = await setup();
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  void say; // this test drives the relay directly
+
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!remember the oncall doc lives in Notion",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+
+  assert.match(logs.join("\n"), /replied in eng/); // the reply did go out…
+  assert.doesNotMatch(logs.join("\n"), /is waiting on/); // …and echoed back quietly
+  await agent.stop();
+});
