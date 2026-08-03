@@ -69,7 +69,7 @@ Flags:
   -y, --yes     Accept the recommended answer to every prompt
       --no-node Skip the local node; everything runs in the cloud
 
-Memory modes (asked on first run, or set MEMORY_MODE in .env):
+Memory modes (asked on first run and saved to .env; or set MEMORY_MODE):
   cloud   transcripts go to your silo, distilled there and enriched
   hybrid  distilled on this machine; only statements sync, still enriched
   local   nothing leaves this machine; no enrichment
@@ -154,18 +154,42 @@ async function resolveMemoryMode(
     return mode;
   };
 
+  /**
+   * Remember the answer, so "asked on first run" is literally true.
+   *
+   * Only when we actually asked: a `--no-node` invocation is a decision
+   * about this run, and writing it to .env would silently make a one-off
+   * flag permanent.
+   */
+  const remember = (mode: MemoryMode): MemoryMode => {
+    persistEnvVar("MEMORY_MODE", mode);
+    log(`Saved MEMORY_MODE=${mode} to .env — delete that line to be asked again.`);
+    return mode;
+  };
+
+  // Whether the CURRENT configuration actually needs a onesilo-node. Not the
+  // same as the `local` tier: SILO_MODE=local is the on-disk demo store,
+  // which is equally "nothing leaves this machine" and needs no node at all.
+  // `relay` is in here because it reaches One Silo *through* the gateway
+  // node's LAN API — it needs one just as much as node storage does.
+  const configNeedsNode =
+    config.silo.mode === "node" ||
+    config.silo.mode === "relay" ||
+    config.distill === "node";
+
   if (flags.noNode) {
-    if (config.memoryMode === "local") {
+    if (config.silo.mode === "node" || config.silo.mode === "relay") {
       console.error(
-        "This configuration keeps memory on a local onesilo-node — --no-node " +
-          "contradicts it.\n" +
+        `This configuration reaches memory through a local onesilo-node ` +
+          `(SILO_MODE=${config.silo.mode}) — --no-node contradicts it.\n` +
           "Drop --no-node, or change MEMORY_MODE in .env."
       );
       return null;
     }
-    if (config.memoryMode === "hybrid") {
-      log("--no-node overrides hybrid mode — transcripts will be distilled in the cloud.");
-    }
+    // Nothing to skip: the on-disk demo store never wanted a node, so the
+    // flag is a no-op rather than a reason to move memory somewhere else.
+    if (!configNeedsNode) return config.memoryMode;
+    log("--no-node overrides hybrid mode — transcripts will be distilled in the cloud.");
     return settle("cloud", true);
   }
 
@@ -173,6 +197,7 @@ async function resolveMemoryMode(
   if (chosen) {
     log(`${chosen} is set — running in ${config.memoryMode} mode.`);
   }
+  const asked = !chosen;
   const mode = chosen
     ? config.memoryMode
     : await askChoice("Where should this workspace's memory live?", MEMORY_CHOICES, {
@@ -185,7 +210,14 @@ async function resolveMemoryMode(
         forced: flags.assumeYes ? "hybrid" : undefined,
       });
 
-  if (mode === "cloud") return settle(mode, !chosen);
+  // Nothing to install when the settled configuration doesn't want a node.
+  // `chosen` means the environment decided, so trust what it actually wired
+  // up rather than the tier label — SILO_MODE=local reads as the `local`
+  // tier but is a JSON file on disk.
+  if (chosen ? !configNeedsNode : mode === "cloud") {
+    settle(mode, false);
+    return asked ? remember(mode) : mode;
+  }
 
   // local and hybrid both need a node: one to store memory, one to distill.
   const needs =
@@ -195,7 +227,8 @@ async function resolveMemoryMode(
   const state = await detectNode(config.node.adminUrl, runner);
   if (state.kind === "running") {
     log(`Found a onesilo-node answering at ${config.node.adminUrl}.`);
-    return settle(mode, !chosen);
+    settle(mode, false);
+    return asked ? remember(mode) : mode;
   }
 
   const question =
@@ -228,7 +261,8 @@ async function resolveMemoryMode(
     );
   }
   log("Node is up.");
-  return settle(mode, !chosen);
+  settle(mode, false);
+  return asked ? remember(mode) : mode;
 }
 
 function abort(detail?: string): null {

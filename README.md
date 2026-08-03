@@ -345,7 +345,9 @@ Memory lives in **silos**, and one agent isn't limited to one:
 
 Where a workspace's conversation is distilled and stored is the decision with
 the most consequence in this setup, so `onesilo-buzz run` asks it directly on
-first run. Set `MEMORY_MODE` to skip the question.
+first run and saves the answer to `.env` — delete that line to be asked
+again. Setting `MEMORY_MODE` (or `SILO_MODE`/`DISTILL_MODE`) skips the
+question entirely.
 
 | | What leaves your machine | Enrichment | `@mention` answer | Needs a node |
 |---|---|---|---|---|
@@ -383,7 +385,7 @@ Everything is environment-driven — see [`.env.example`](.env.example).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MEMORY_MODE` | *(asked on first run)* | `cloud`, `hybrid`, or `local` — see [Memory modes](#memory-modes) |
+| `MEMORY_MODE` | *(asked on first run, then saved)* | `cloud`, `hybrid`, or `local` — see [Memory modes](#memory-modes) |
 | `BUZZ_RELAY_URL` | *(asked on first run)* | Your Buzz workspace relay; `ws://localhost:7777` for local dev |
 | `BUZZ_CHANNEL_IDS` | *(auto-discovered)* | Comma-separated channels to listen in; set it to pin the agent to a subset |
 | `AGENT_HANDLE` | `OneSilo` | The agent's @handle |

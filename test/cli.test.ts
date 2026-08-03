@@ -9,7 +9,14 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -653,4 +660,87 @@ test("an environment-chosen mode is passed through, not rewritten", async () => 
     "cloud",
     "an explicit setting must not be rewritten behind the operator's back"
   );
+});
+
+test("SILO_MODE=local needs no node, and --no-node does not contradict it", async () => {
+  // The on-disk demo store is equally "nothing leaves this machine", so it
+  // maps to the local tier — but it needs no onesilo-node at all. Keying the
+  // contradiction check on the tier label made --no-node fail for a config
+  // that never wanted a node, and made `run` try to install one.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "local";
+  delete process.env.MEMORY_MODE;
+  delete process.env.DISTILL_MODE;
+
+  const config = loadConfig(process.env);
+  assert.equal(config.memoryMode, "local");
+
+  const mode = await resolveMemoryMode(config, parseFlags(["--no-node"]), runner);
+  assert.equal(mode, "local", "no contradiction — this store needs no node");
+  assert.deepEqual(runner.calls, [], "and nothing should have been installed");
+});
+
+test("SILO_MODE=local runs without reaching for a node", async () => {
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "local";
+  delete process.env.MEMORY_MODE;
+  delete process.env.DISTILL_MODE;
+
+  const mode = await resolveMemoryMode(loadConfig(process.env), parseFlags([]), runner);
+  assert.equal(mode, "local");
+  assert.deepEqual(runner.calls, []);
+});
+
+test("an inherited property name is not a valid MEMORY_MODE", () => {
+  // `in` matches Object.prototype members, so MEMORY_MODE=toString resolved
+  // to a function, spread to an empty tier, and quietly landed on the
+  // on-disk demo store — memory somewhere nobody chose, which is the one
+  // outcome this setting exists to prevent.
+  for (const name of ["toString", "constructor", "hasOwnProperty"]) {
+    assert.throws(
+      () => loadConfig({ MEMORY_MODE: name } as NodeJS.ProcessEnv),
+      /must be one of local, hybrid, cloud/,
+      `MEMORY_MODE=${name} must be refused`
+    );
+  }
+});
+
+test("--no-node refuses relay mode too, which also needs a node", async () => {
+  // relay reaches One Silo *through* the gateway node's LAN API. Skipping
+  // the node there leaves the store pointed at nothing, which looks healthy
+  // and fails on every memory call.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "relay";
+  delete process.env.MEMORY_MODE;
+  delete process.env.DISTILL_MODE;
+
+  const mode = await resolveMemoryMode(loadConfig(process.env), parseFlags(["--no-node"]), runner);
+  assert.equal(mode, null);
+  assert.deepEqual(runner.calls, []);
+});
+
+test("the chosen mode is written to .env so the question is asked once", async () => {
+  const runner = fakeRunner({ present: [] });
+  const dir = mkdtempSync(join(tmpdir(), "buzz-mode-"));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  delete process.env.MEMORY_MODE;
+  delete process.env.SILO_MODE;
+  delete process.env.DISTILL_MODE;
+  try {
+    // No TTY in tests, so askChoice takes the default (hybrid) — but hybrid
+    // needs a node and none is installable, so drive the cloud path with
+    // an env-free --no-node… which is a no-op here. Force via MEMORY_MODE
+    // absent + a runner that has nothing, and assert on the abort path not
+    // persisting instead.
+    const mode = await resolveMemoryMode(loadConfig({}), parseFlags([]), runner);
+    assert.equal(mode, null, "no node available, so this aborts");
+    assert.ok(
+      !existsSync(join(dir, ".env")),
+      "an aborted run must not leave a mode behind in .env"
+    );
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

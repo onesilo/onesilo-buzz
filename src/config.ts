@@ -185,7 +185,11 @@ function resolveTier(env: NodeJS.ProcessEnv): {
   distill: "node" | "cloud";
 } {
   const requested = env.MEMORY_MODE?.trim().toLowerCase();
-  if (requested && requested in TIERS) {
+  // Object.hasOwn, not `in`: `in` also matches inherited members, so
+  // MEMORY_MODE=toString resolved to Function.prototype.toString, spread to
+  // an empty tier, and silently landed on the on-disk demo store — the exact
+  // "guessed where memory goes" failure the throw below exists to prevent.
+  if (requested && Object.hasOwn(TIERS, requested)) {
     const tier = TIERS[requested as MemoryMode];
     return { name: requested as MemoryMode, ...tier };
   }
@@ -240,11 +244,14 @@ function resolveDistill(
 export function configWarnings(config: Config, env = process.env): string[] {
   const warnings: string[] = [];
   if (config.silo.mode === "node" && env.DISTILL_MODE === "cloud") {
+    // Names the condition, not one way of reaching it: node storage is also
+    // reachable via MEMORY_MODE=local, and naming a variable the operator
+    // never set reads as a message about somebody else's configuration.
     warnings.push(
-      "DISTILL_MODE=cloud with SILO_MODE=node: memories are stored on your " +
-        "node, but distilled by the agent's keyword heuristics — one turn at " +
-        "a time, with no cross-turn context — while the node's model sits " +
-        "unused. Drop DISTILL_MODE (or set it to `node`) unless this is " +
+      "DISTILL_MODE=cloud with node-local storage: memories are stored on " +
+        "your node, but distilled by the agent's keyword heuristics — one " +
+        "turn at a time, with no cross-turn context — while the node's model " +
+        "sits unused. Drop DISTILL_MODE (or set it to `node`) unless this is " +
         "deliberate."
     );
   }
