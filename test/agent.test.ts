@@ -600,3 +600,34 @@ test("a message waiting behind a slow turn says so", async () => {
   release();
   await agent.stop();
 });
+
+test("the agent's own reply echoing back is not reported as a backlog", async () => {
+  // Relays serve every event matching the filter, our own replies included,
+  // and the echo lands while the turn that published it is still running.
+  // Counting it would report a message waiting behind that turn when
+  // nothing is actually queued.
+  const { identity, relay, say } = await setup();
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  void say; // this test drives the relay directly
+
+  relay.deliver(
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "eng"]],
+        content: "!remember the oncall doc lives in Notion",
+      },
+      generateSecretKey()
+    )
+  );
+  await settle();
+
+  assert.match(logs.join("\n"), /replied in eng/); // the reply did go out…
+  assert.doesNotMatch(logs.join("\n"), /is waiting on/); // …and echoed back quietly
+  await agent.stop();
+});

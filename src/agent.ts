@@ -116,6 +116,13 @@ export class SiloMemoryAgent {
       this.log(`could not publish the agent profile (continuing unnamed): ${err}`);
     }
     this.relay.subscribeChannels(this.options.channelIds ?? [], (event) => {
+      // Our own replies come back on our own subscription — the relay
+      // serves every event matching the filter, ours included. handleEvent
+      // drops them anyway, but dropping them here keeps them out of the
+      // backlog count: a reply published mid-turn echoes back while that
+      // turn is still running, which would otherwise report a message
+      // waiting behind it that does not exist.
+      if (event.pubkey === this.identity.pubkey) return;
       // Events are processed strictly in arrival order: a !recall must see
       // the memories of every message delivered before it, and a redelivered
       // event must not be captured twice.
