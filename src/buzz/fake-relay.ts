@@ -31,6 +31,10 @@ export class FakeRelay implements BuzzRelay {
     return new Set(this.subscribed);
   }
 
+  unsubscribeChannels(channelIds: string[]): void {
+    for (const id of channelIds) this.subscribed.delete(id);
+  }
+
   /** Historical read over `stored`, matching only what the agent uses. */
   async queryOnce(filter: Record<string, unknown>): Promise<NostrEvent[]> {
     const kinds = filter.kinds as number[] | undefined;

@@ -51,6 +51,8 @@ export interface BuzzRelay {
    * agent's event-id dedup already absorbs.
    */
   subscribedChannels?(): Set<string>;
+  /** Stop delivery for these channels (the agent was removed from them). */
+  unsubscribeChannels?(channelIds: string[]): void;
   /** Sign with the agent identity and publish. */
   publish(template: EventTemplate): Promise<NostrEvent>;
   close(): void;
@@ -422,6 +424,29 @@ export class WebSocketRelay implements BuzzRelay {
       // computed per (re)subscribe by filterFor().
       this.subscriptions.set(subId, scope);
       this.ws.send(JSON.stringify(["REQ", subId, this.filterFor(scope)]));
+    }
+  }
+
+  /**
+   * Drop the subscriptions for these channels, telling the relay to stop.
+   *
+   * Being removed from a channel has to actually stop delivery: leaving the
+   * REQ open would keep capturing conversation from a channel the agent was
+   * deliberately taken out of, which is the one thing a memory agent must
+   * never do.
+   */
+  unsubscribeChannels(channelIds: string[]): void {
+    const dropping = new Set(channelIds);
+    for (const [subId, scope] of [...this.subscriptions]) {
+      if (scope.length === 0 || !scope.every((id) => dropping.has(id))) continue;
+      this.subscriptions.delete(subId);
+      this.handlers.delete(subId);
+      try {
+        this.ws?.send(JSON.stringify(["CLOSE", subId]));
+      } catch {
+        // Socket already gone; a reconnect won't replay it either, since
+        // it's out of `subscriptions` now.
+      }
     }
   }
 

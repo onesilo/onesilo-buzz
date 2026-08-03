@@ -154,8 +154,13 @@ export class SiloMemoryAgent {
     } catch (err) {
       this.log(`channel discovery via member lists failed: ${err}`);
     }
-    if (found.size > 0) return [...found];
-
+    // Channels visible in traffic. Used as the whole answer when member
+    // lists gave nothing, and otherwise only to report a discrepancy —
+    // NOT unioned in. Buzz's open channels are readable by non-members, so
+    // this source cannot tell "I was added to it" from "I can see it", and
+    // capturing a channel the agent was never added to would break the one
+    // promise it makes about its own scope.
+    const seenInTraffic = new Set<string>();
     try {
       const recent = await query({
         kinds: [KIND_CHANNEL_MESSAGE],
@@ -163,12 +168,28 @@ export class SiloMemoryAgent {
       });
       for (const event of recent) {
         const channelId = event.tags.find((t) => t[0] === CHANNEL_TAG)?.[1];
-        if (channelId) found.add(channelId);
+        if (channelId) seenInTraffic.add(channelId);
       }
     } catch (err) {
       this.log(`channel discovery via recent messages failed: ${err}`);
     }
-    return [...found];
+
+    if (found.size > 0) {
+      // A member list that came back short (a relay's default limit, partial
+      // indexing) would leave the agent quietly deaf in the channels it
+      // missed. It can't be fixed by trusting traffic instead, but it can be
+      // made loud rather than silent.
+      const missing = [...seenInTraffic].filter((id) => !found.has(id));
+      if (missing.length > 0) {
+        this.log(
+          `saw traffic in ${missing.length} channel(s) no member list covers ` +
+            `(${missing.map((c) => `#${c.slice(0, 8)}`).join(", ")}) — not listening ` +
+            `there. If the agent belongs in one, set BUZZ_CHANNEL_IDS.`
+        );
+      }
+      return [...found];
+    }
+    return [...seenInTraffic];
   }
 
   /**
@@ -182,6 +203,22 @@ export class SiloMemoryAgent {
     const channels = configured.length > 0 ? configured : await this.discoverChannels();
     const already = this.relay.subscribedChannels?.() ?? new Set<string>();
     const fresh = channels.filter((id) => !already.has(id));
+
+    // Stop listening to channels the agent has been removed from. Guarded on
+    // a non-empty result: a relay hiccup or a failed query returns nothing,
+    // and treating that as "removed from everything" would take the agent
+    // offline until the next sweep. Only a positive answer about current
+    // membership is allowed to revoke.
+    if (channels.length > 0 && this.relay.unsubscribeChannels) {
+      const current = new Set(channels);
+      const gone = [...already].filter((id) => !current.has(id));
+      if (gone.length > 0) {
+        this.relay.unsubscribeChannels(gone);
+        this.log(
+          `no longer in ${gone.length} channel(s): ${gone.map((c) => `#${c.slice(0, 8)}`).join(", ")} — stopped listening`
+        );
+      }
+    }
 
     if (fresh.length === 0) {
       // Nothing new. On the very first sweep with nothing found, still open
@@ -230,6 +267,11 @@ export class SiloMemoryAgent {
       .finally(() => {
         this.queued -= 1;
       });
+  }
+
+  /** Run one channel-sync sweep now (tests; the timer does this on its own). */
+  syncForTest(): Promise<void> {
+    return this.syncChannelSubscriptions();
   }
 
   async start(): Promise<void> {

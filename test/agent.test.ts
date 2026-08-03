@@ -799,3 +799,111 @@ test("no avatar key is published when none is configured", async () => {
   assert.ok(!("picture" in JSON.parse(profile.content)));
   await agent.stop();
 });
+
+test("being removed from a channel stops the agent listening to it", async () => {
+  // A memory agent that keeps capturing a channel it was removed from is
+  // the one failure mode that is worse than not working at all.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  const memberList = (channelId: string, members: string[]) =>
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", channelId], ...members.map((p) => ["p", p])],
+        content: "",
+      },
+      other
+    );
+
+  relay.stored = [
+    memberList("stays", [identity.pubkey]),
+    memberList("removed-later", [identity.pubkey]),
+  ];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["stays", "removed-later"]));
+
+  // The agent is dropped from one channel; the next sweep must let it go.
+  relay.stored = [memberList("stays", [identity.pubkey])];
+  await agent.syncForTest();
+
+  assert.deepEqual(relay.subscribedChannels(), new Set(["stays"]));
+  assert.match(logs.join("\n"), /no longer in 1 channel/);
+  await agent.stop();
+});
+
+test("a discovery that comes back empty does not revoke every channel", async () => {
+  // A relay hiccup returns nothing. Treating that as "removed from
+  // everything" would take the agent offline until the next sweep, so only
+  // a positive answer about membership is allowed to revoke.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "still-ours"], ["p", identity.pubkey]],
+        content: "",
+      },
+      generateSecretKey()
+    ),
+  ];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {});
+  await agent.start();
+  assert.deepEqual(relay.subscribedChannels(), new Set(["still-ours"]));
+
+  relay.stored = []; // the relay goes quiet
+  await agent.syncForTest();
+  assert.deepEqual(
+    relay.subscribedChannels(),
+    new Set(["still-ours"]),
+    "an empty result is not evidence of removal"
+  );
+  await agent.stop();
+});
+
+test("channels seen in traffic but absent from member lists are reported, not joined", async () => {
+  // Open channels are readable by non-members, so traffic cannot tell "I
+  // was added" from "I can see it". Capturing one the agent was never
+  // added to would break its scope promise — but a member list that came
+  // back short would otherwise leave it quietly deaf, so say so.
+  const identity = loadIdentity("OneSilo");
+  const relay = new FakeRelay(identity.secretKey);
+  const other = generateSecretKey();
+  relay.stored = [
+    finalizeEvent(
+      {
+        kind: KIND_MEMBER_LIST,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["d", "ours"], ["p", identity.pubkey]],
+        content: "",
+      },
+      other
+    ),
+    finalizeEvent(
+      {
+        kind: KIND_CHANNEL_MESSAGE,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [[CHANNEL_TAG, "someone-elses"]],
+        content: "not our business",
+      },
+      other
+    ),
+  ];
+  const logs: string[] = [];
+  const agent = new SiloMemoryAgent(relay, new LocalSiloStore(), identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  assert.deepEqual(relay.subscribedChannels(), new Set(["ours"]));
+  assert.match(logs.join("\n"), /no member list covers/);
+  assert.match(logs.join("\n"), /someone-/);
+  await agent.stop();
+});
