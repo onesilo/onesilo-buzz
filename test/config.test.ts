@@ -197,3 +197,22 @@ test("an unknown MEMORY_MODE is refused rather than silently ignored", () => {
     /must be one of local, hybrid, cloud/
   );
 });
+
+test("an explicit MEMORY_MODE beats a leftover SILO_MODE", () => {
+  // The privacy-worst direction: MEMORY_MODE=hybrid alongside a SILO_MODE
+  // left in an older .env resolved to CLOUD distillation, so raw transcripts
+  // left the machine — the one thing choosing hybrid says not to do.
+  const cfg = loadConfig({
+    MEMORY_MODE: "hybrid",
+    SILO_MODE: "mcp",
+  } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "node");
+  assert.equal(cfg.memoryMode, "hybrid");
+});
+
+test("a bare SILO_MODE keeps the legacy cloud default", () => {
+  // Without a stated preference, an old config must not silently inherit a
+  // tier nobody asked for.
+  const cfg = loadConfig({ SILO_MODE: "mcp" } as NodeJS.ProcessEnv);
+  assert.equal(cfg.distill, "cloud");
+});

@@ -233,7 +233,14 @@ function resolveDistill(
 ): "node" | "cloud" {
   if (env.DISTILL_MODE === "node") return "node";
   if (env.DISTILL_MODE === "cloud") return "cloud";
+  // An explicit MEMORY_MODE beats the legacy rule below. Without this,
+  // MEMORY_MODE=hybrid alongside a SILO_MODE=mcp left over from an older
+  // .env resolved to cloud distillation — raw transcripts leaving the
+  // machine, which is the one thing choosing hybrid says not to do.
+  if (env.MEMORY_MODE) return tier.distill;
   if (mode === "node") return "node";
+  // Legacy: a bare SILO_MODE with no distillation preference kept the old
+  // default rather than inheriting a tier nobody asked for.
   return env.SILO_MODE ? "cloud" : tier.distill;
 }
 

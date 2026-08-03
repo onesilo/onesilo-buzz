@@ -744,3 +744,38 @@ test("the chosen mode is written to .env so the question is asked once", async (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("SILO_MODE=mcp still gets asked about local distillation", async () => {
+  // SILO_MODE fixes where memory is STORED. For a cloud silo that leaves the
+  // question this flow exists to ask — distill here or there — and the old
+  // flow did ask it, defaulting to yes. Treating SILO_MODE as "already
+  // decided" silently moved those users onto cloud distillation.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "mcp";
+  delete process.env.MEMORY_MODE;
+  delete process.env.DISTILL_MODE;
+
+  // No TTY, so the picker takes its default (hybrid) — which needs a node,
+  // and none is installable here, so it aborts. A silent skip would have
+  // returned "cloud" instead.
+  const mode = await resolveMemoryMode(loadConfig(process.env), parseFlags([]), runner);
+  assert.equal(mode, null, "the question was asked, and hybrid needs a node");
+});
+
+test("SILO_MODE=node settles the tier without asking", async () => {
+  // Nothing left to decide: node storage already implies node distillation.
+  const runner = fakeRunner({ present: [] });
+  process.env.SILO_MODE = "node";
+  delete process.env.MEMORY_MODE;
+  delete process.env.DISTILL_MODE;
+
+  const { out, text } = capture();
+  const original = console.log;
+  console.log = (line: string) => out.write(String(line) + "\n");
+  try {
+    await resolveMemoryMode(loadConfig(process.env), parseFlags([]), runner);
+  } finally {
+    console.log = original;
+  }
+  assert.match(text(), /SILO_MODE=node is set/);
+});

@@ -113,12 +113,33 @@ const MEMORY_CHOICES: Choice<MemoryMode>[] = [
   },
 ];
 
-/** True when something in the environment has already made this decision. */
-function alreadyChosen(env: NodeJS.ProcessEnv): string | null {
-  for (const name of ["MEMORY_MODE", "SILO_MODE", "DISTILL_MODE"]) {
-    if (env[name]) return `${name}=${env[name]}`;
+/**
+ * Whether the environment has settled the tier, and the choices left if not.
+ *
+ * SILO_MODE alone does NOT settle it. It fixes where memory is *stored*,
+ * which for a cloud silo still leaves the question this flow exists to ask:
+ * does conversation get distilled here or there. Treating it as decided
+ * meant anyone with SILO_MODE=mcp in an older .env silently stopped being
+ * offered local distillation — the old flow asked them, and defaulted to
+ * yes. That is a privacy default quietly moving in the wrong direction.
+ */
+function tierDecision(
+  env: NodeJS.ProcessEnv,
+  config: Config
+): { decidedBy: string } | { choices: MemoryMode[] } {
+  for (const name of ["MEMORY_MODE", "DISTILL_MODE"]) {
+    if (env[name]) return { decidedBy: `${name}=${env[name]}` };
   }
-  return null;
+  // Node or on-disk storage leaves nothing to ask: both are `local`, and
+  // node storage already implies node distillation.
+  if (config.silo.mode === "node" || config.silo.mode === "local") {
+    return { decidedBy: `SILO_MODE=${config.silo.mode}` };
+  }
+  // A cloud silo (direct or via a gateway node) is compatible with either
+  // distillation side, so offer exactly those two rather than a `local`
+  // option that SILO_MODE would immediately override.
+  if (env.SILO_MODE) return { choices: ["hybrid", "cloud"] };
+  return { choices: ["hybrid", "cloud", "local"] };
 }
 
 /**
@@ -193,14 +214,18 @@ async function resolveMemoryMode(
     return settle("cloud", true);
   }
 
-  const chosen = alreadyChosen(process.env);
+  const decision = tierDecision(process.env, config);
+  const chosen = "decidedBy" in decision;
   if (chosen) {
-    log(`${chosen} is set — running in ${config.memoryMode} mode.`);
+    log(`${decision.decidedBy} is set — running in ${config.memoryMode} mode.`);
   }
   const asked = !chosen;
+  const offered = chosen
+    ? MEMORY_CHOICES
+    : MEMORY_CHOICES.filter((c) => decision.choices.includes(c.value));
   const mode = chosen
     ? config.memoryMode
-    : await askChoice("Where should this workspace's memory live?", MEMORY_CHOICES, {
+    : await askChoice("Where should this workspace's memory live?", offered, {
         // Hybrid is the recommendation, and it is also what this flow did
         // before the tiers were named: the old question defaulted to
         // installing a node, which produced local distillation plus a cloud
