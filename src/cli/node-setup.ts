@@ -151,7 +151,8 @@ const FORMULA = "onesilo/tap/onesilo-node";
  * already default to that under `-yes`, but stating it means a change to
  * that default cannot silently widen a node installed on someone's behalf.
  */
-const SETUP_ARGS = ["setup", "-yes", "-serve=agents"];
+const BASE_SETUP_ARGS = ["setup", "-yes"];
+const SETUP_ARGS = [...BASE_SETUP_ARGS, "-serve=agents"];
 
 export async function runNodeSetup(
   log: (line: string) => void,
@@ -166,7 +167,7 @@ export async function runNodeSetup(
     // A node predating `-serve` rejects the flag before doing any work. Its
     // `-yes` defaults are loopback-only anyway, so retrying without it is
     // the same outcome, not a weaker one.
-    args = ["setup", "-yes"];
+    args = BASE_SETUP_ARGS;
     code = await runner.run("onesilo-node", args);
   }
   if (code !== 0) {
@@ -174,10 +175,24 @@ export async function runNodeSetup(
       ok: false,
       detail:
         `\`onesilo-node ${args.join(" ")}\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
-        "  onesilo-node setup",
+        `  onesilo-node ${interactiveArgs(args).join(" ")}`,
     };
   }
   return { ok: true };
+}
+
+/**
+ * The same setup, minus the answer-everything-for-me flag.
+ *
+ * Dropping `-yes` is the whole point — it is what turns the run interactive
+ * so the operator can watch it fail. Everything else has to survive, `-serve`
+ * most of all: suggesting a bare `onesilo-node setup` would send them to
+ * debug a differently-scoped run than the one that broke, and on a node whose
+ * defaults later widen, the command we recommended would be the one that
+ * exposes more than the command we ran.
+ */
+function interactiveArgs(args: string[]): string[] {
+  return args.filter((arg) => arg !== "-yes");
 }
 
 /** Go's `flag` package exits 2 on an unrecognized flag. */

@@ -350,6 +350,31 @@ test("node setup reports the command it actually ran when setup fails", async ()
   assert.match(outcome.detail ?? "", /`onesilo-node setup -yes` exited 1/);
 });
 
+test("the suggested interactive command keeps the scope of the one that failed", async () => {
+  // Dropping -yes is what makes it interactive. Dropping -serve too would
+  // send the operator to debug a differently-scoped run than the one that
+  // broke — and on a node whose defaults later widen, the command we
+  // recommended would expose more than the command we ran.
+  const { runNodeSetup } = await import("../src/cli/node-setup.js");
+  const runner: Runner = {
+    async which() {
+      return true;
+    },
+    async run() {
+      return 1;
+    },
+  };
+
+  const outcome = await runNodeSetup(() => {}, runner);
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.detail ?? "", /onesilo-node setup -serve=agents$/m);
+  assert.doesNotMatch(
+    outcome.detail ?? "",
+    /^ +onesilo-node setup$/m,
+    "must not suggest a bare setup, which re-asks the shape instead of reproducing it"
+  );
+});
+
 test("unpaired mcp mode fails fast, before any node work", async () => {
   // The original first-run experience: minutes of node install/setup/start,
   // THEN "not paired", exit — taking the fresh node down too. The pairing
