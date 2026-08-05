@@ -143,25 +143,60 @@ const FORMULA = "onesilo/tap/onesilo-node";
  * here. Shelling out rather than reimplementing is the point: there is
  * exactly one description of how a node is configured, and it lives in the
  * node.
+ *
+ * `-serve=agents` is the other half of the contract. The node this flow
+ * provisions exists to serve one agent on this machine; it should not
+ * advertise itself over Bonjour or accept connections from the local
+ * network, and nobody is at the keyboard to notice if it does. Recent nodes
+ * already default to that under `-yes`, but stating it means a change to
+ * that default cannot silently widen a node installed on someone's behalf.
  */
+const BASE_SETUP_ARGS = ["setup", "-yes"];
+const SETUP_ARGS = [...BASE_SETUP_ARGS, "-serve=agents"];
+
 export async function runNodeSetup(
   log: (line: string) => void,
   runner: Runner = systemRunner
 ): Promise<InstallOutcome> {
   log(
-    "Initializing the node with default settings (first run downloads Ollama and a local model — this can take a while)…"
+    "Initializing the node for local agents only (first run downloads Ollama and a local model — this can take a while)…"
   );
-  const code = await runner.run("onesilo-node", ["setup", "-yes"]);
+  let args = SETUP_ARGS;
+  let code = await runner.run("onesilo-node", args);
+  if (code === FLAG_PARSE_EXIT) {
+    // A node predating `-serve` rejects the flag before doing any work. Its
+    // `-yes` defaults are loopback-only anyway, so retrying without it is
+    // the same outcome, not a weaker one.
+    args = BASE_SETUP_ARGS;
+    code = await runner.run("onesilo-node", args);
+  }
   if (code !== 0) {
     return {
       ok: false,
       detail:
-        `\`onesilo-node setup -yes\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
-        "  onesilo-node setup",
+        `\`onesilo-node ${args.join(" ")}\` exited ${code}. Run the node's interactive setup to see what failed:\n` +
+        `  onesilo-node ${interactiveArgs(args).join(" ")}`,
     };
   }
   return { ok: true };
 }
+
+/**
+ * The same setup, minus the answer-everything-for-me flag.
+ *
+ * Dropping `-yes` is the whole point — it is what turns the run interactive
+ * so the operator can watch it fail. Everything else has to survive, `-serve`
+ * most of all: suggesting a bare `onesilo-node setup` would send them to
+ * debug a differently-scoped run than the one that broke, and on a node whose
+ * defaults later widen, the command we recommended would be the one that
+ * exposes more than the command we ran.
+ */
+function interactiveArgs(args: string[]): string[] {
+  return args.filter((arg) => arg !== "-yes");
+}
+
+/** Go's `flag` package exits 2 on an unrecognized flag. */
+const FLAG_PARSE_EXIT = 2;
 
 /** A node process this CLI started and is responsible for stopping. */
 export interface SupervisedNode {
