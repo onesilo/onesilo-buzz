@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { finalizeEvent, generateSecretKey } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, type EventTemplate } from "nostr-tools";
 import { FakeRelay } from "../src/buzz/fake-relay.js";
 import {
   KIND_CHANNEL_MESSAGE,
@@ -997,6 +997,81 @@ test("an authoritative empty membership opens no unscoped subscription", async (
     relay.published.filter((e) => e.kind === KIND_CHANNEL_MESSAGE).length,
     0,
     "nothing should have been captured or answered"
+  );
+  await agent.stop();
+});
+
+test("channel discovery re-runs once the relay authenticates", async () => {
+  // The failure this pins: on an auth-enforcing relay, startup discovery is
+  // answered by a connection the relay has not authenticated yet, so it
+  // comes back empty and the agent concludes it is in no channels. Replaying
+  // the subscriptions after AUTH faithfully replays that wrong answer, and
+  // the agent sits connected, subscribed and deaf.
+  const identity = loadIdentity("silo");
+  const store = new LocalSiloStore();
+  const logs: string[] = [];
+
+  let authenticated = false;
+  let authFn: (() => void) | undefined;
+  const subscribed: string[][] = [];
+
+  const relay = {
+    connect: async () => {},
+    // Pre-auth the relay answers nothing, exactly as it does on the wire.
+    queryOnce: async (filter: Record<string, unknown>) => {
+      if (!authenticated) return [];
+      const kinds = filter.kinds as number[] | undefined;
+      if (!kinds?.includes(KIND_MEMBER_LIST)) return [];
+      return [
+        finalizeEvent(
+          {
+            kind: KIND_MEMBER_LIST,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+              ["d", "engineering"],
+              ["p", identity.pubkey],
+            ],
+            content: "",
+          },
+          generateSecretKey()
+        ),
+      ];
+    },
+    subscribeChannels: (ids: string[]) => {
+      subscribed.push([...ids]);
+    },
+    subscribedChannels: () =>
+      new Set(subscribed.flat().filter((id) => id.length > 0)),
+    unsubscribeChannels: () => {},
+    onAuthenticated: (fn: () => void) => {
+      authFn = fn;
+    },
+    publish: async (t: EventTemplate) => finalizeEvent(t, identity.secretKey),
+    close: () => {},
+  };
+
+  const agent = new SiloMemoryAgent(relay, store, identity, {
+    log: (l) => logs.push(l),
+  });
+  await agent.start();
+
+  // Startup: nothing discoverable, so the agent falls back to the unscoped
+  // subscription — which is the one Buzz excludes from live fan-out.
+  // Not deepEqual against [[]]: node's assert narrows `actual` to the
+  // expected type, and [[]] infers as never[][], which poisons `subscribed`
+  // for the assertion below.
+  assert.equal(subscribed.length, 1, "expected exactly one subscription pre-auth");
+  assert.equal(subscribed[0]!.length, 0, "expected the unscoped fallback pre-auth");
+  assert.ok(authFn, "agent never registered a post-auth callback");
+
+  // The relay accepts our AUTH.
+  authenticated = true;
+  authFn!();
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.ok(
+    subscribed.some((ids) => ids.includes("engineering")),
+    `expected a channel-scoped subscription after auth, got ${JSON.stringify(subscribed)}`
   );
   await agent.stop();
 });

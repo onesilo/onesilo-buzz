@@ -59,6 +59,20 @@ export interface BuzzRelay {
   subscribedChannels?(): Set<string>;
   /** Stop delivery for these channels (the agent was removed from them). */
   unsubscribeChannels?(channelIds: string[]): void;
+  /**
+   * Called once the relay has accepted our NIP-42 AUTH.
+   *
+   * Anything the agent asked the relay *before* that point was answered by
+   * an unauthenticated connection — on an auth-enforcing relay, with
+   * nothing. Channel discovery is the case that matters: it runs at
+   * startup, comes back empty because the relay refused it, and leaves the
+   * agent subscribed to nothing in particular. Replaying the subscriptions
+   * does not fix that, because the answer that was wrong was the discovery,
+   * not the subscription.
+   *
+   * Optional: a relay without auth never calls it and needs no hook.
+   */
+  onAuthenticated?(fn: () => void): void;
   /** Sign with the agent identity and publish. */
   publish(template: EventTemplate): Promise<NostrEvent>;
   close(): void;
@@ -117,6 +131,7 @@ export class WebSocketRelay implements BuzzRelay {
    */
   private authEventId?: string;
   private authenticated = false;
+  private authListeners: Array<() => void> = [];
   /** Signed events waiting for the socket to (re)open; FIFO, bounded. */
   private outbox: Array<{
     event: NostrEvent;
@@ -156,6 +171,16 @@ export class WebSocketRelay implements BuzzRelay {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => this.open(resolve, reject));
+  }
+
+  /**
+   * Register a callback for "the relay has accepted our AUTH".
+   *
+   * Fires on every successful auth, not just the first: a reconnect
+   * re-authenticates, and the same reasoning applies each time.
+   */
+  onAuthenticated(fn: () => void): void {
+    this.authListeners.push(fn);
   }
 
   /**
@@ -406,6 +431,18 @@ export class WebSocketRelay implements BuzzRelay {
     this.resubscribeAll();
     for (const event of this.recentlySent) {
       this.ws?.send(JSON.stringify(["EVENT", event]));
+    }
+    // Re-issuing the subscriptions is not enough. Whatever the agent
+    // *asked* pre-auth was answered by an unauthenticated connection, and
+    // on this relay that means "nothing" — so channel discovery concluded
+    // the agent is in no channels and subscribed accordingly. Replaying
+    // that subscription faithfully replays the wrong answer.
+    for (const fn of this.authListeners) {
+      try {
+        fn();
+      } catch (err) {
+        this.log(`post-auth listener failed: ${err}`);
+      }
     }
   }
 

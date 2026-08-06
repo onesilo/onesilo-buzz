@@ -214,6 +214,25 @@ export class SiloMemoryAgent {
       }
       return { channels: [...found], authoritative: true };
     }
+    // No member lists AND no traffic: the agent has nothing to go on, and
+    // this is the state that looks like a hang. Name the two things that
+    // actually produce it, because "connected, subscribed, silent" reads
+    // as a bug in the agent rather than a relay that answered nothing.
+    if (seenInTraffic.size === 0) {
+      this.log(
+        `discovery found no channels: the relay served no member lists and no ` +
+          `recent messages. If the agent is already in a channel, the relay is ` +
+          `likely withholding both from it — set BUZZ_CHANNEL_IDS to the ` +
+          `channel id to listen anyway.`
+      );
+    } else {
+      // Traffic without member lists: we can see channels but cannot prove
+      // membership, so this is the id the operator needs for the env var.
+      this.log(
+        `no member lists; falling back to ${seenInTraffic.size} channel(s) seen ` +
+          `in traffic: ${[...seenInTraffic].map((c) => `#${c}`).join(", ")}`
+      );
+    }
     // No member lists at all: the relay can't answer the membership
     // question, so this is a guess, and it must not drive revocation.
     return { channels: [...seenInTraffic], authoritative: false };
@@ -326,6 +345,17 @@ export class SiloMemoryAgent {
     // Events are processed strictly in arrival order: a !recall must see
     // the memories of every message delivered before it, and a redelivered
     // event must not be captured twice. See enqueue().
+    // Discovery at startup runs against a connection the relay has not
+    // authenticated yet, so on an auth-enforcing relay it is answered with
+    // nothing and concludes the agent is in no channels. Re-run it the
+    // moment AUTH lands, rather than leaving the agent deaf until the 30s
+    // sweep — and on a relay that never challenges us, this never fires and
+    // costs nothing.
+    this.relay.onAuthenticated?.(() => {
+      void this.syncChannelSubscriptions().catch((err) =>
+        this.log(`channel sync after authentication failed: ${err}`)
+      );
+    });
     await this.syncChannelSubscriptions();
     if ((this.relay.subscribedChannels?.().size ?? 0) === 0 && this.relay.queryOnce) {
       // Worth saying plainly: on Buzz this state receives nothing live, and
