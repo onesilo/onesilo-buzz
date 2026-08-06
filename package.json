@@ -34,7 +34,8 @@
     "demo": "tsx demo/demo.ts",
     "test": "tsx --test test/*.test.ts",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm test",
+    "e2e": "bash scripts/e2e.sh"
   },
   "dependencies": {
     "@noble/hashes": "^1.6.0",
