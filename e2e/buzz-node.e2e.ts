@@ -44,10 +44,22 @@ if (!NODE_KEY) {
   process.exit(2);
 }
 
+/**
+ * Per-request ceiling on the node.
+ *
+ * A node that accepts the connection and then stops answering would
+ * otherwise hang the whole run: the retry deadline in eventually() only
+ * applies between attempts, so a single fetch that never settles sits inside
+ * one attempt forever and pins a CI runner. A timeout turns that into a
+ * failed attempt, which the retry loop can act on and eventually report.
+ */
+const REQUEST_TIMEOUT_MS = 5_000;
+
 /** Total memories the node holds, straight from its own accounting. */
 async function nodeSiloCounts(): Promise<Array<{ silo_id?: string; count?: number }>> {
   const res = await fetch(`${NODE_URL}/v1/memory/silos`, {
     headers: { "X-Silo-Node-Key": NODE_KEY },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`node silos failed: ${res.status} ${await res.text()}`);
   return (await res.json()) as Array<{ silo_id?: string; count?: number }>;
@@ -59,6 +71,7 @@ async function nodeRecall(query: string, limit = 20): Promise<Array<Record<strin
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Silo-Node-Key": NODE_KEY },
     body: JSON.stringify({ query, limit }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`node recall failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { results?: Array<Record<string, unknown>> };

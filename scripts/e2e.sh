@@ -25,12 +25,19 @@ if [ -z "$NODE_REPO" ] || [ ! -d "$NODE_REPO" ]; then
   exit 2
 fi
 
-WORK="$(mktemp -d)"
+# Explicit template: a bare `mktemp -d` is a GNU extension and fails on
+# BSD/macOS, which is where most of this gets developed.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/onesilo-e2e.XXXXXX")"
 NODE_PID=""
 
 cleanup() {
   if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
-    kill "$NODE_PID" 2>/dev/null || true
+    # Kill the process group, not just the node. The node supervises
+    # children (it can run `ollama serve` itself), and killing only the
+    # parent orphans them — they keep the port bound, so the next run fails
+    # to start for a reason that has nothing to do with the next run.
+    # Falls back to the bare pid if the group is unavailable.
+    kill -- "-$NODE_PID" 2>/dev/null || kill "$NODE_PID" 2>/dev/null || true
     wait "$NODE_PID" 2>/dev/null || true
   fi
   rm -rf "$WORK"
@@ -63,7 +70,13 @@ port = $ADMIN_PORT
 TOML
 
 echo "==> starting node"
-"$NODE_BIN" -config "$WORK/config.toml" > "$WORK/node.log" 2>&1 &
+# Own process group so cleanup can take the whole tree down. setsid where
+# available; without it the kill falls back to the single pid.
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$NODE_BIN" -config "$WORK/config.toml" > "$WORK/node.log" 2>&1 &
+else
+  "$NODE_BIN" -config "$WORK/config.toml" > "$WORK/node.log" 2>&1 &
+fi
 NODE_PID=$!
 
 # Wait for readiness rather than sleeping a guessed interval: a slow start
