@@ -75,6 +75,38 @@ function check(name: string, run: () => void | Promise<void>) {
   checks.push({ name, run });
 }
 
+/**
+ * Retry an assertion until it holds or the deadline passes.
+ *
+ * Capture and recall are asynchronous and cross the network to the node, so
+ * an assertion that runs once, immediately, is racing work that is legitimately
+ * still in flight. That failure would read as "memory is broken" rather than
+ * "the test was impatient" — the worst kind of red, because it points away
+ * from the actual problem.
+ *
+ * Only sound for assertions that go from false to true and stay true. A
+ * "this must NOT be stored" check cannot use this: it would pass on the first
+ * poll, before the write it is trying to rule out could even have happened.
+ * Those run once, last, after everything else has converged and the system is
+ * therefore known to be quiet.
+ */
+const EVENTUALLY_MS = 15_000;
+async function eventually(run: () => void | Promise<void>, timeoutMs = EVENTUALLY_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown;
+  for (;;) {
+    try {
+      await run();
+      return;
+    } catch (err) {
+      last = err;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  throw last;
+}
+
 async function main() {
   const alice = member("alice");
   const bob = member("bob");
@@ -124,10 +156,12 @@ async function main() {
     );
     console.log(`\n#${channelId} <${from.name}> ${content}`);
     relay.deliver(event);
-    // Capture is async and writes over HTTP to the node; give the round trip
-    // room. A bare setTimeout is crude, but the alternative is reaching into
-    // the agent's internals, and this is the integration boundary on purpose.
-    await new Promise((r) => setTimeout(r, 250));
+    // Just enough to hand control to the agent's handler; the assertions do
+    // the real waiting. Sleeping long enough to be "safe" here would be
+    // betting that the node round trip beats a guess, and losing that bet
+    // reports "the decision never reached the node" — a memory bug that
+    // isn't one, which is worse than a slow test.
+    await new Promise((r) => setTimeout(r, 20));
   };
 
   console.log("\n=== #eng: passive capture ===");
@@ -154,50 +188,66 @@ async function main() {
 
   // ---- assertions, all read back from the node itself ----
 
-  check("the decision reached the node", async () => {
-    const hits = await nodeRecall("payments migration Friday");
-    const found = hits.some((h) => String(h.content ?? "").toLowerCase().includes("payments migration"));
-    assert.ok(found, `node holds no memory of the decision. recall returned: ${JSON.stringify(hits)}`);
-  });
+  check("the decision reached the node", () =>
+    eventually(async () => {
+      const hits = await nodeRecall("payments migration Friday");
+      const found = hits.some((h) =>
+        String(h.content ?? "").toLowerCase().includes("payments migration")
+      );
+      assert.ok(found, `node holds no memory of the decision. recall returned: ${JSON.stringify(hits)}`);
+    }));
 
-  check("!remember reached the node", async () => {
-    const hits = await nodeRecall("rollback plan legacy processor");
-    const found = hits.some((h) => String(h.content ?? "").toLowerCase().includes("rollback plan"));
-    assert.ok(found, `explicit !remember not stored. recall returned: ${JSON.stringify(hits)}`);
-  });
+  check("!remember reached the node", () =>
+    eventually(async () => {
+      const hits = await nodeRecall("rollback plan legacy processor");
+      const found = hits.some((h) =>
+        String(h.content ?? "").toLowerCase().includes("rollback plan")
+      );
+      assert.ok(found, `explicit !remember not stored. recall returned: ${JSON.stringify(hits)}`);
+    }));
 
+  check("memories carry provenance back to the Buzz event", () =>
+    eventually(async () => {
+      const hits = await nodeRecall("payments migration Friday");
+      const withMeta = hits.find(
+        (h) => h.metadata && Object.keys(h.metadata as object).length > 0
+      );
+      assert.ok(withMeta, `no memory carried metadata: ${JSON.stringify(hits)}`);
+      const meta = JSON.stringify(withMeta!.metadata);
+      assert.ok(
+        /event|buzz|channel/i.test(meta),
+        `metadata has no link back to the source event: ${meta}`
+      );
+    }));
+
+  check("the agent answered the @mention", () =>
+    eventually(() => {
+      const answered = replies.slice(beforeMention);
+      assert.ok(answered.length > 0, "agent published no reply to the @mention");
+      assert.ok(
+        answered.some((r) => /payments|migration|friday/i.test(r.content)),
+        `reply did not surface the remembered decision: ${JSON.stringify(answered)}`
+      );
+    }));
+
+  check("the reply went back to the asking channel", () =>
+    eventually(() => {
+      const answered = replies.slice(beforeMention);
+      assert.ok(
+        answered.some((r) => r.channel === "support"),
+        `reply landed in the wrong channel: ${JSON.stringify(answered)}`
+      );
+    }));
+
+  // Registered last on purpose. Every check above polls until it passes, so
+  // by the time this runs the pipeline has demonstrably drained — which is
+  // what makes "still absent" mean "never captured" rather than "not yet".
   check("chatter is not stored", async () => {
     const hits = await nodeRecall("morning all");
-    const found = hits.some((h) => String(h.content ?? "").toLowerCase().trim() === "morning all");
+    const found = hits.some(
+      (h) => String(h.content ?? "").toLowerCase().trim() === "morning all"
+    );
     assert.ok(!found, "a greeting was captured; the salience filter is not doing its job");
-  });
-
-  check("memories carry provenance back to the Buzz event", async () => {
-    const hits = await nodeRecall("payments migration Friday");
-    const withMeta = hits.find((h) => h.metadata && Object.keys(h.metadata as object).length > 0);
-    assert.ok(withMeta, `no memory carried metadata: ${JSON.stringify(hits)}`);
-    const meta = JSON.stringify(withMeta!.metadata);
-    assert.ok(
-      /event|buzz|channel/i.test(meta),
-      `metadata has no link back to the source event: ${meta}`
-    );
-  });
-
-  check("the agent answered the @mention", () => {
-    const answered = replies.slice(beforeMention);
-    assert.ok(answered.length > 0, "agent published no reply to the @mention");
-    assert.ok(
-      answered.some((r) => /payments|migration|friday/i.test(r.content)),
-      `reply did not surface the remembered decision: ${JSON.stringify(answered)}`
-    );
-  });
-
-  check("the reply went back to the asking channel", () => {
-    const answered = replies.slice(beforeMention);
-    assert.ok(
-      answered.some((r) => r.channel === "support"),
-      `reply landed in the wrong channel: ${JSON.stringify(answered)}`
-    );
   });
 
   console.log("\n=== results ===");
