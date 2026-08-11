@@ -43,15 +43,17 @@ export class ComputeDistillingStore implements MemoryStore {
     try {
       ({ text, model } = await this.compute.generate(distillPrompt(segment)));
     } catch (err) {
+      // Rethrow so the TurnWindowManager restores the segment and retries
+      // on a later flush — returning "queued" here would silently DROP it
+      // (restore only happens on thrown errors; see agent.flushSegment).
+      // For a plan gate that later flush is after the owner acts (upgrade
+      // or period reset); the raw transcript never leaves the buffer.
       if (err instanceof ComputeGateError) {
-        // A plan gate is not transient: buffering would retry into the same
-        // wall. Surface it loudly; the segment stays queued for a later
-        // flush after the owner acts (upgrade / period reset).
-        this.log(`compute gated (${err.status}): ${err.message}`);
-        return { status: "queued" };
+        this.log(`compute gated (${err.status}); segment buffered: ${err.message}`);
+      } else {
+        this.log(`compute unreachable; segment buffered (${err})`);
       }
-      this.log(`compute unreachable; segment buffered (${err})`);
-      return { status: "queued" };
+      throw err;
     }
 
     const statements = parseStatements(text);

@@ -46,15 +46,19 @@ test("distills via compute and stores only statements", async () => {
   assert.match(remembered[0].content, /ship tuesday/i);
 });
 
-test("gate errors buffer the segment instead of throwing", async () => {
+test("gate errors rethrow so the window restores the segment", async () => {
   const { store, remembered } = innerStore();
   const wrapped = wrapWithComputeDistillation(store, {
     generate: async () => {
       throw new ComputeGateError("out of chats", 402);
     },
   } as any);
-  const outcome = await wrapped.rememberTranscript!(segment);
-  assert.equal(outcome.status, "queued");
+  // Restore-on-throw is the buffer: a swallowed error would DROP the
+  // segment (flushSegment only restores when rememberTranscript throws).
+  await assert.rejects(
+    () => wrapped.rememberTranscript!(segment),
+    (e: any) => e instanceof ComputeGateError
+  );
   assert.equal(remembered.length, 0);
 });
 

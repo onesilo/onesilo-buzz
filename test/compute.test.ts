@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { CloudComputeClient, ComputeGateError } from "../src/silo/compute.js";
 import type { McpAuth } from "../src/silo/mcp-client.js";
@@ -6,6 +6,11 @@ import type { McpAuth } from "../src/silo/mcp-client.js";
 const auth = (reauth = async () => false): McpAuth => ({
   headers: async () => ({ authorization: "Bearer t1" }),
   reauthorize: reauth,
+});
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  (globalThis as any).fetch = realFetch;
 });
 
 function fakeFetch(handler: (url: string, init: any) => any) {
