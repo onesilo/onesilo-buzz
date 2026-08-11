@@ -183,7 +183,7 @@ export function distillPrompt(segment: TranscriptSegment): string {
   );
 }
 
-interface Statement {
+export interface Statement {
   kind: MemoryKind;
   content: string;
 }
@@ -208,7 +208,7 @@ export function parseStatements(text: string): Statement[] {
   return statements;
 }
 
-function toMemory(s: Statement, segment: TranscriptSegment, anchor: Turn): Memory {
+export function toMemory(s: Statement, segment: TranscriptSegment, anchor: Turn): Memory {
   return {
     // Deterministic CONTENT-derived id (bucket-scoped). Three things depend
     // on it: id-keyed stores must not clobber sibling statements from one
