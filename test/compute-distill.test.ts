@@ -21,7 +21,7 @@ const segment: TranscriptSegment = {
 function innerStore(outcome: RememberOutcome = { status: "queued" }) {
   const remembered: any[] = [];
   const store: MemoryStore = {
-    remember: async (m) => {
+    remember: async (m: any) => {
       remembered.push(m);
       return outcome;
     },
