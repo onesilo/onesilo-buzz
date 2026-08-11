@@ -196,6 +196,15 @@ function tierSummary(config: Config): string {
   if (config.silo.mode === "relay") {
     return "reached through your gateway node; " + TIER_SUMMARY[config.memoryMode];
   }
+  if (config.distill === "compute") {
+    // The hybrid tier line says "distilled on this machine", which is wrong
+    // for compute mode — the distillation runs on the control plane's
+    // governed compute endpoint; only statements are stored.
+    return (
+      "distilled by your silo's compute endpoint; only the statements are " +
+      "stored, raw transcripts are never persisted"
+    );
+  }
   return TIER_SUMMARY[config.memoryMode];
 }
 

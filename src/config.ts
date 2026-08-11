@@ -239,7 +239,19 @@ function resolveDistill(
   // The middle posture (SILO-122): transcripts are distilled by the control
   // plane's governed compute endpoint, but only distilled statements are
   // stored in the silo — no local model needed, no raw transcript persisted.
-  if (env.DISTILL_MODE === "compute") return "compute";
+  // Only SILO_MODE=mcp can reach it: the gateway node relays /api/* and
+  // /mcp only (never /v1/*), and node mode has no cloud credential at all.
+  if (env.DISTILL_MODE === "compute") {
+    if (mode !== "mcp") {
+      throw new Error(
+        `DISTILL_MODE=compute requires SILO_MODE=mcp (the agent's own ` +
+          `pairing): the gateway relay does not forward /v1/chat/completions ` +
+          `and ${mode} mode holds no cloud credential. Use DISTILL_MODE=node ` +
+          `for on-machine distillation instead.`
+      );
+    }
+    return "compute";
+  }
   // An explicit MEMORY_MODE beats the legacy rule below. Without this,
   // MEMORY_MODE=hybrid alongside a SILO_MODE=mcp left over from an older
   // .env resolved to cloud distillation — raw transcripts leaving the
