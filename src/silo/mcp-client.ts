@@ -42,7 +42,7 @@ export function nodeKeyAuth(key: () => string): McpAuth {
   };
 }
 
-function normalizeAuth(auth: OAuthLike | McpAuth): McpAuth {
+export function normalizeAuth(auth: OAuthLike | McpAuth): McpAuth {
   if ("ensureAccessToken" in auth) {
     return {
       headers: async () => ({ Authorization: `Bearer ${await auth.ensureAccessToken()}` }),

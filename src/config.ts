@@ -58,7 +58,7 @@ export interface Config {
    * raw and One Silo's pipeline distills them. "node": a local onesilo-node
    * distills first and only distilled statements leave the machine.
    */
-  distill: "cloud" | "node";
+  distill: "cloud" | "node" | "compute";
   silo:
     | { mode: "local"; path: string }
     | {
@@ -210,10 +210,13 @@ function resolveTier(env: NodeJS.ProcessEnv): {
  */
 function describeTier(
   mode: "mcp" | "local" | "relay" | "node",
-  distill: "node" | "cloud"
+  distill: "node" | "cloud" | "compute"
 ): MemoryMode {
   if (mode === "node" || mode === "local") return "local";
-  return distill === "node" ? "hybrid" : "cloud";
+  // "compute" stores only distilled statements, like hybrid — but the
+  // distillation itself runs on the governed cloud endpoint, so for the
+  // tier summary it reads as the hybrid privacy posture.
+  return distill === "cloud" ? "cloud" : "hybrid";
 }
 
 /**
@@ -230,9 +233,25 @@ function resolveDistill(
   env: NodeJS.ProcessEnv,
   mode: "mcp" | "local" | "relay" | "node",
   tier: { distill: "node" | "cloud" }
-): "node" | "cloud" {
+): "node" | "cloud" | "compute" {
   if (env.DISTILL_MODE === "node") return "node";
   if (env.DISTILL_MODE === "cloud") return "cloud";
+  // The middle posture (SILO-122): transcripts are distilled by the control
+  // plane's governed compute endpoint, but only distilled statements are
+  // stored in the silo — no local model needed, no raw transcript persisted.
+  // Only SILO_MODE=mcp can reach it: the gateway node relays /api/* and
+  // /mcp only (never /v1/*), and node mode has no cloud credential at all.
+  if (env.DISTILL_MODE === "compute") {
+    if (mode !== "mcp") {
+      throw new Error(
+        `DISTILL_MODE=compute requires SILO_MODE=mcp (the agent's own ` +
+          `pairing): the gateway relay does not forward /v1/chat/completions ` +
+          `and ${mode} mode holds no cloud credential. Use DISTILL_MODE=node ` +
+          `for on-machine distillation instead.`
+      );
+    }
+    return "compute";
+  }
   // An explicit MEMORY_MODE beats the legacy rule below. Without this,
   // MEMORY_MODE=hybrid alongside a SILO_MODE=mcp left over from an older
   // .env resolved to cloud distillation — raw transcripts leaving the

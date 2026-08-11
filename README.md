@@ -271,9 +271,18 @@ independent switches control where things run:
 | `SILO_MODE` | `DISTILL_MODE` | Memory lives | Distillation runs | Cloud credential |
 | --- | --- | --- | --- | --- |
 | `mcp` *(default)* | `cloud` *(default)* | your cloud silo | One Silo | agent's own OAuth |
+| `mcp` | `compute` | your cloud silo | One Silo's **compute endpoint** (statements only stored) | agent's own OAuth |
 | `mcp` | `node` | your cloud silo | **your node** | agent's own OAuth |
 | `relay` | `node` | your cloud silo, via the node | **your node** | **the node's sign-in only** |
 | `node` | `node` | **your node** (SQLite, hybrid recall) | **your node** | **none** |
+
+- **`DISTILL_MODE=compute`** — the middle privacy posture. Each segment is
+  distilled by the control plane's OpenAI-compatible compute endpoint
+  (`POST /v1/chat/completions`, same OAuth pairing, governed and metered
+  against your plan), and **only the distilled statements are stored** in
+  the silo — the raw transcript is never persisted server-side. No local
+  model required. If your plan gates the compute call, segments buffer and
+  the gate reason is logged.
 
 - **`SILO_MODE=relay`** — One Silo through a *gateway* node's MCP relay
   (`/v1/cloud/mcp`). The node holds the only cloud credential; the agent

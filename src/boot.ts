@@ -23,6 +23,8 @@ import { McpSiloStore } from "./silo/mcp-store.js";
 import { NodeMemoryStore } from "./silo/node-memory.js";
 import { SiloBucketRouter } from "./silo/buckets.js";
 import { wrapWithNodeDistillation } from "./silo/node-distill.js";
+import { CloudComputeClient } from "./silo/compute.js";
+import { wrapWithComputeDistillation } from "./silo/compute-distill.js";
 import { SiloNodeClient, resolveNodeAdminToken, resolveNodeKey } from "./node/client.js";
 import { SiloMemoryAgent } from "./agent.js";
 import type { MemoryStore } from "./silo/types.js";
@@ -137,7 +139,15 @@ function buildStore(
     }
     const mcp = new McpClient(`${config.silo.serverUrl}/mcp`, oauth);
     const router = SiloBucketRouter.fromEnv(config.silo.siloId, config.silo.channelMap);
-    return new McpSiloStore(mcp, router, log);
+    const mcpStore = new McpSiloStore(mcp, router, log);
+    if (config.distill === "compute") {
+      // Distill via the governed compute endpoint (same OAuth pairing as
+      // MCP), store only the statements: raw transcripts reach the model
+      // but are never persisted in the silo (SILO-122).
+      const compute = new CloudComputeClient(config.silo.serverUrl, oauth, log);
+      return wrapWithComputeDistillation(mcpStore, compute, log);
+    }
+    return mcpStore;
   }
   if (config.silo.mode === "relay") {
     // One Silo through the gateway node's MCP relay: the node holds the only
@@ -185,6 +195,15 @@ function tierSummary(config: Config): string {
   }
   if (config.silo.mode === "relay") {
     return "reached through your gateway node; " + TIER_SUMMARY[config.memoryMode];
+  }
+  if (config.distill === "compute") {
+    // The hybrid tier line says "distilled on this machine", which is wrong
+    // for compute mode — the distillation runs on the control plane's
+    // governed compute endpoint; only statements are stored.
+    return (
+      "distilled by your silo's compute endpoint; only the statements are " +
+      "stored, raw transcripts are never persisted"
+    );
   }
   return TIER_SUMMARY[config.memoryMode];
 }
